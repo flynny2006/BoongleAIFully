@@ -8,13 +8,13 @@ import { resetChatSession } from '../services/geminiService';
 
 
 const HomePage: React.FC = () => {
-  const { user, session, login, register, logout, loading: authLoading } = useAuth();
+  const { user, session, login, register, logout, loading: authLoading, profile, userApiKey, updateUserApiKey } = useAuth();
   const navigate = useNavigate();
 
   // Auth form states
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [username, setUsername] = useState(''); // For registration
+  const [username, setUsername] = useState('');
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authActionLoading, setAuthActionLoading] = useState(false);
@@ -26,6 +26,18 @@ const HomePage: React.FC = () => {
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectCreationLoading, setProjectCreationLoading] = useState(false);
 
+  // API Key state
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeyMessage, setApiKeyMessage] = useState<string | null>(null);
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+
+  useEffect(() => {
+    if (userApiKey) {
+      setApiKeyInput(userApiKey); // Pre-fill if already set
+    } else {
+      setApiKeyInput(''); // Clear if not set or user logs out
+    }
+  }, [userApiKey]);
 
   useEffect(() => {
     if (user && session) {
@@ -38,7 +50,7 @@ const HomePage: React.FC = () => {
         })
         .finally(() => setProjectsLoading(false));
     } else {
-      setProjects([]); // Clear projects if user logs out
+      setProjects([]);
     }
   }, [user, session]);
 
@@ -61,8 +73,7 @@ const HomePage: React.FC = () => {
     if (error) {
       setAuthError(error.message);
     } else {
-      // Success, redirect or update UI will be handled by AuthContext effect
-      setEmail(''); setPassword(''); setUsername(''); // Clear form
+      setEmail(''); setPassword(''); setUsername('');
     }
     setAuthActionLoading(false);
   };
@@ -70,6 +81,12 @@ const HomePage: React.FC = () => {
   const handleCreateNewProject = async (e: FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim() || !user) return;
+    
+    if (!userApiKey && !process.env.API_KEY) {
+      setAuthError("Please set your Gemini API Key in your profile settings before creating a project.");
+      return;
+    }
+
     setProjectCreationLoading(true);
     setAuthError(null);
     resetChatSession(); 
@@ -77,18 +94,17 @@ const HomePage: React.FC = () => {
     try {
       const createdProject = await createProject({
         name: newProjectName.trim(),
-        description: `New project: ${newProjectName.trim()}`, // Initial description
+        description: `New project: ${newProjectName.trim()}`,
         model_id: newProjectModel,
         active_editor_file: 'index.html',
         active_preview_html_file: 'index.html',
         view_mode: 'preview',
       }, user.id);
       
-      // Create a default index.html for the new project
        await supabase.from('project_files').insert([{
          project_id: createdProject.id,
          file_path: 'index.html',
-         content: '<!DOCTYPE html><html><head><title>New Project</title></head><body><h1>Welcome!</h1></body></html>'
+         content: '<!DOCTYPE html><html><head><title>New Project</title><script src="https://cdn.tailwindcss.com/"></script></head><body class="bg-gray-100 p-8"><h1>Welcome to ' + newProjectName.trim() + '!</h1><p>Your AI assistant is ready to help you build.</p></body></html>'
        }]);
 
       setNewProjectName('');
@@ -106,9 +122,23 @@ const HomePage: React.FC = () => {
     await logout();
     setAuthActionLoading(false);
     navigate('/');
-  }
+  };
 
-  if (authLoading) {
+  const handleApiKeySave = async (e: FormEvent) => {
+    e.preventDefault();
+    setApiKeyLoading(true);
+    setApiKeyMessage(null);
+    const { error } = await updateUserApiKey(apiKeyInput);
+    if (error) {
+      setApiKeyMessage(`Error: ${error.message}`);
+    } else {
+      setApiKeyMessage("Gemini API Key saved successfully!");
+    }
+    setApiKeyLoading(false);
+    setTimeout(() => setApiKeyMessage(null), 3000);
+  };
+
+  if (authLoading && !session) { // Show full page loader only on initial auth check
     return (
       <div className="flex items-center justify-center h-screen bg-black text-white">
         <div className="w-12 h-12 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>
@@ -120,38 +150,40 @@ const HomePage: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
         <h1 className="text-4xl md:text-5xl font-bold mb-8 text-center">AI Software Engineer Studio</h1>
-        <form onSubmit={handleAuthSubmit} className="w-full max-w-sm p-8 bg-gray-800 rounded-lg shadow-xl">
+        <div className="w-full max-w-sm p-6 bg-gray-800 rounded-lg shadow-xl">
           <h2 className="text-2xl font-semibold mb-6 text-center text-purple-400">{isRegisterMode ? 'Register New Account' : 'Login'}</h2>
           {authError && <p className="mb-4 text-red-400 bg-red-900 p-2 rounded text-sm">{authError}</p>}
           
-          {isRegisterMode && (
+          <form onSubmit={handleAuthSubmit}>
+            {isRegisterMode && (
+              <input
+                type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+                placeholder="Username" required
+                className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+              />
+            )}
             <input
-              type="text" value={username} onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username" required
+              type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email" required
               className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
             />
-          )}
-          <input
-            type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email" required
-            className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
-          />
-          <input
-            type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password" required
-            className="w-full p-3 mb-6 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
-          />
-          <button type="submit" disabled={authActionLoading}
-            className="w-full p-3 bg-purple-600 hover:bg-purple-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
-          >
-            {authActionLoading ? (isRegisterMode ? 'Registering...' : 'Logging in...') : (isRegisterMode ? 'Register' : 'Login')}
-          </button>
+            <input
+              type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password" required
+              className="w-full p-3 mb-6 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+            />
+            <button type="submit" disabled={authActionLoading || authLoading}
+              className="w-full p-3 bg-purple-600 hover:bg-purple-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
+            >
+              {authActionLoading ? (isRegisterMode ? 'Registering...' : 'Logging in...') : (isRegisterMode ? 'Register' : 'Login')}
+            </button>
+          </form>
           <button type="button" onClick={() => { setIsRegisterMode(!isRegisterMode); setAuthError(null); }}
             className="w-full mt-4 text-sm text-purple-400 hover:text-purple-300"
           >
             {isRegisterMode ? 'Already have an account? Login' : "Don't have an account? Register"}
           </button>
-        </form>
+        </div>
       </div>
     );
   }
@@ -160,9 +192,9 @@ const HomePage: React.FC = () => {
   return (
     <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10">
       <div className="w-full max-w-4xl">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl md:text-4xl font-bold">Your Projects</h1>
-          <button onClick={handleLogout} disabled={authActionLoading}
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl md:text-4xl font-bold">Welcome, {profile?.username || user.email}</h1>
+          <button onClick={handleLogout} disabled={authActionLoading || authLoading}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white font-semibold transition-colors text-sm"
           >
             {authActionLoading ? 'Logging out...' : 'Logout'}
@@ -170,6 +202,32 @@ const HomePage: React.FC = () => {
         </div>
         
         {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm">{authError}</p>}
+
+        {/* API Key Management Section */}
+        <div className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
+          <h2 className="text-2xl font-semibold mb-4 text-purple-400">Your Gemini API Key</h2>
+          <p className="text-sm text-gray-400 mb-1">This key will be used for all AI interactions.</p>
+          <p className="text-xs text-yellow-400 mb-3">Warning: API keys are sensitive. Ensure you are on a secure connection. This key is stored in your user profile.</p>
+          <form onSubmit={handleApiKeySave}>
+            <input
+              type="password" // Use password type to mask input
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="Enter your Gemini API Key"
+              className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+            />
+            <button type="submit" disabled={apiKeyLoading || authLoading}
+              className="w-full p-3 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
+            >
+              {apiKeyLoading ? 'Saving...' : 'Save API Key'}
+            </button>
+          </form>
+          {apiKeyMessage && <p className={`mt-3 text-sm ${apiKeyMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{apiKeyMessage}</p>}
+           {!userApiKey && process.env.API_KEY && (
+            <p className="mt-3 text-xs text-gray-500">No personal API key set. The application will attempt to use a system-configured key if available (not recommended for personalized usage).</p>
+          )}
+        </div>
+
 
         {/* Create New Project Form */}
         <form onSubmit={handleCreateNewProject} className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
@@ -192,7 +250,7 @@ const HomePage: React.FC = () => {
               ))}
             </select>
           </div>
-          <button type="submit" disabled={!newProjectName.trim() || projectCreationLoading}
+          <button type="submit" disabled={!newProjectName.trim() || projectCreationLoading || authLoading}
             className="w-full p-3 bg-green-600 hover:bg-green-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
           >
             {projectCreationLoading ? 'Creating...' : 'Start Building'}
@@ -200,6 +258,7 @@ const HomePage: React.FC = () => {
         </form>
 
         {/* Projects List */}
+        <h2 className="text-2xl font-semibold mb-4 text-purple-400">Your Projects</h2>
         {projectsLoading ? (
           <div className="text-center py-8">
             <div className="inline-block w-8 h-8 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>

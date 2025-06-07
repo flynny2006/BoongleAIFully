@@ -1,7 +1,16 @@
 import { AVAILABLE_MODELS } from './constants';
-import { User } from '@supabase/supabase-js';
+import { User as SupabaseUser, Session } from '@supabase/supabase-js'; // Aliased to avoid conflict if User is defined locally
 
 export type ModelId = typeof AVAILABLE_MODELS[number]['id'];
+
+// Extended profile information, including the API key
+export interface Profile {
+  id: string; // UUID, matches auth.users.id
+  username?: string | null;
+  avatar_url?: string | null;
+  updated_at?: string | null;
+  gemini_api_key?: string | null; // User's own Gemini API key
+}
 
 export interface ChatMessage {
   id: string; // UUID from Supabase or client-generated before save
@@ -45,12 +54,15 @@ export interface ProjectFile {
 
 // For AuthContext
 export interface AuthContextType {
-  user: User | null;
-  session: import('@supabase/supabase-js').Session | null;
+  user: SupabaseUser | null;
+  profile: Profile | null; // Full user profile including API key
+  session: Session | null;
   loading: boolean;
   login: (email: string, pass: string) => Promise<any>;
   register: (email: string, pass: string, username: string) => Promise<any>;
   logout: () => Promise<void>;
+  updateUserApiKey: (apiKey: string) => Promise<{ error: Error | null }>;
+  userApiKey: string | null; // Convenience accessor for the key
 }
 
 // For published projects

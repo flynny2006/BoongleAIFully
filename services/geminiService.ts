@@ -2,26 +2,12 @@ import { GoogleGenAI, Chat, GenerateContentResponse, HarmCategory, HarmBlockThre
 import { AI_SYSTEM_PROMPT } from '../constants';
 import { ChatMessage, AIProjectStructure, ModelId } from "../types";
 
-let ai: GoogleGenAI | null = null;
-let activeChatSession: Chat | null = null;
-let currentModelId: ModelId | null = null;
-
-
-const getAiClient = (): GoogleGenAI => {
-    if (!ai) {
-        if (!process.env.API_KEY) {
-            console.error("API_KEY environment variable not set.");
-            alert("Gemini API Key is not configured. Please set the process.env.API_KEY environment variable.");
-            throw new Error("API_KEY environment variable not set.");
-        }
-        ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    }
-    return ai;
-};
+// No global 'ai' or 'activeChatSession' or 'currentModelId' singletons anymore.
+// These will be managed per-call or per-instance needed.
 
 const convertMessagesToGenAiHistory = (messages: ChatMessage[]): Content[] => {
     return messages.map(msg => {
-        if (msg.sender === 'system') return null;
+        if (msg.sender === 'system') return null; // System messages are for UI, not direct GenAI history. AI_SYSTEM_PROMPT handles system instructions.
         return {
             role: msg.sender === 'user' ? 'user' : 'model',
             parts: [{ text: msg.text }],
@@ -29,23 +15,25 @@ const convertMessagesToGenAiHistory = (messages: ChatMessage[]): Content[] => {
     }).filter(Boolean) as Content[];
 };
 
-
-export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: ModelId): Chat => {
-    // If activeChatSession exists AND it's for the current modelId, reuse it.
-    // Otherwise, create a new one. This handles model switching.
-    if (activeChatSession && currentModelId === modelId) {
-        // Potentially update history if needed, though GenAI's Chat object handles this internally for sendMessage.
-        // For now, if session exists for model, assume it's current.
-        return activeChatSession;
+export const getOrCreateChatSession = (
+    apiKey: string, // User's API key (or fallback)
+    chatHistory: ChatMessage[], 
+    modelId: ModelId
+): Chat => {
+    if (!apiKey) {
+        console.error("Gemini API Key is not provided for chat session creation.");
+        alert("Gemini API Key is missing. Please configure it in your profile or ensure system key is set.");
+        throw new Error("Gemini API Key is missing.");
     }
-    
-    console.log(`Creating new chat session for model: ${modelId}`);
-    const client = getAiClient();
-    const genAiHistory = convertMessagesToGenAiHistory(chatHistory);
-    currentModelId = modelId; // Update the current model ID
 
-    activeChatSession = client.chats.create({
-        model: modelId, // Use the passed modelId
+    // Create a new GoogleGenAI client instance with the provided API key for this session
+    const client = new GoogleGenAI({ apiKey });
+    
+    console.log(`Creating new chat session for model: ${modelId} using provided API key.`);
+    const genAiHistory = convertMessagesToGenAiHistory(chatHistory);
+
+    const newChatSession = client.chats.create({
+        model: modelId,
         config: {
             systemInstruction: AI_SYSTEM_PROMPT,
             safetySettings: [
@@ -57,17 +45,21 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
         },
         history: genAiHistory,
     });
-    return activeChatSession;
+    return newChatSession;
 };
 
-// Call this when the project fundamentally changes (new project, model switch, version restore)
+// This function is less about resetting a global singleton now,
+// and more a signal that the calling component (ProjectPage) should nullify its chatSession state.
 export const resetChatSession = () => {
-    console.log("Resetting active chat session.");
-    activeChatSession = null;
-    currentModelId = null; 
+    console.log("Signal to reset active chat session state in consuming component.");
+    // The actual state (activeChatSession) is now managed in ProjectPage.tsx
 };
 
-export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?: ModelId): Promise<AIProjectStructure> => {
+export const sendMessageToAI = async (
+    chat: Chat, // The Chat object, already initialized with an API key
+    message: string,
+    modelIdUsed?: ModelId // Optional, for logging or if needed by AI
+): Promise<AIProjectStructure> => {
     try {
         const result: GenerateContentResponse = await chat.sendMessage({ message });
         const rawText = result.text;
@@ -101,9 +93,14 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
 
     } catch (error) {
         console.error("Error sending message to AI:", error);
-        // Don't reset session here by default, let caller decide.
-        // resetChatSession(); 
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+        // Check for specific API key related errors (this might need refinement based on actual Gemini SDK error types)
+        if (errorMessage.toLowerCase().includes("api key not valid") || errorMessage.toLowerCase().includes("permission denied")) {
+             return {
+                files: { "error.txt": `Gemini API Error: ${errorMessage}. Please check if your API key is correct and has permissions.` },
+                aiMessage: `There was an issue with the Gemini API call: ${errorMessage}. Please verify your API key.`
+            };
+        }
         return {
             files: { "error.txt": `Error from AI service: ${errorMessage}` },
             aiMessage: `Error from AI: ${errorMessage}. The chat session might be affected. Try sending your message again.`
