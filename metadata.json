@@ -1,0 +1,5 @@
+{
+  "name": "AI Software Engineer Studio",
+  "description": "A web application where you can describe a software project and an AI assistant helps you build it, providing a live preview of the generated application.",
+  "requestFramePermissions": []
+}
