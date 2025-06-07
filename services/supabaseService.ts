@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
-import { Project, ProjectFile, ChatMessage, PublishedProject, Profile } from '../types';
+import { Project, ProjectFile, ChatMessage, PublishedProject } from '../types';
 
 // TODO: Replace with environment variables in a real deployment
 const supabaseUrl = 'https://qepczquvetguuzcdmxry.supabase.co';
@@ -7,31 +7,7 @@ const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
-// --- Profile Functions ---
-export const getProfile = async (userId: string): Promise<Profile | null> => {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
-  if (error && error.code !== 'PGRST116') { // PGRST116: 0 rows is not an error for a profile
-    console.error('Error fetching profile:', error);
-    throw error;
-  }
-  return data;
-};
-
-export const updateProfile = async (userId: string, updates: Partial<Profile>): Promise<Profile> => {
-  const { data, error } = await supabase
-    .from('profiles')
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', userId)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-};
-
+// --- Auth Functions (delegated to AuthContext, but client is here) ---
 
 // --- Project Functions ---
 export const getUserProjects = async (userId: string): Promise<Project[]> => {
@@ -102,13 +78,17 @@ export const getProjectFiles = async (projectId: string): Promise<Record<string,
   return filesRecord;
 };
 
+// Upserts all project files. Deletes existing ones for the project first for simplicity.
+// A more granular approach would be to diff and update/insert/delete individual files.
 export const saveProjectFiles = async (projectId: string, files: Record<string, string>): Promise<void> => {
+  // Delete existing files for this project
   const { error: deleteError } = await supabase
     .from('project_files')
     .delete()
     .eq('project_id', projectId);
   if (deleteError) throw deleteError;
 
+  // Insert new files
   const fileEntries = Object.entries(files).map(([filePath, content]) => ({
     project_id: projectId,
     file_path: filePath,
@@ -121,6 +101,7 @@ export const saveProjectFiles = async (projectId: string, files: Record<string, 
       .insert(fileEntries);
     if (insertError) throw insertError;
   }
+   // Update project's last_modified timestamp
   await updateProject(projectId, {});
 };
 
@@ -150,9 +131,10 @@ export const deleteChatMessagesAfter = async (projectId: string, timestamp: stri
     .from('chat_messages')
     .delete()
     .eq('project_id', projectId)
-    .gt('timestamp', timestamp);
+    .gt('timestamp', timestamp); // timestamp is ISO string from Supabase
   if (error) throw error;
 };
+
 
 // --- Publishing Functions ---
 export const publishProject = async (
@@ -161,15 +143,17 @@ export const publishProject = async (
   filesSnapshot: Record<string, string>,
   entryPointFile: string
 ): Promise<PublishedProject> => {
+  // Check if already published (by project_id, assuming one live version per project)
   const { data: existing, error: fetchError } = await supabase
     .from('published_projects')
     .select('id')
     .eq('project_id', projectId)
     .single();
 
-  if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+  if (fetchError && fetchError.code !== 'PGRST116') throw fetchError; // PGRST116: 0 rows
 
   if (existing) {
+    // Update existing
     const { data, error } = await supabase
       .from('published_projects')
       .update({ files_snapshot: filesSnapshot, entry_point_file: entryPointFile, updated_at: new Date().toISOString() })
@@ -179,6 +163,7 @@ export const publishProject = async (
     if (error) throw error;
     return data;
   } else {
+    // Create new
     const { data, error } = await supabase
       .from('published_projects')
       .insert([{ project_id: projectId, user_id: userId, files_snapshot: filesSnapshot, entry_point_file: entryPointFile }])
