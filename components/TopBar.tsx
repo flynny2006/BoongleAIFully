@@ -1,6 +1,9 @@
+
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AVAILABLE_MODELS } from '../constants';
 import { ModelId } from '../types';
+import LeftArrowIcon from './icons/LeftArrowIcon'; // Import the new icon
 
 interface TopBarProps {
   selectedModel: ModelId;
@@ -21,10 +24,26 @@ const TopBar: React.FC<TopBarProps> = ({
   isPublished,
   isPublishing
 }) => {
+  const navigate = useNavigate();
+
+  const handleGoHome = () => {
+    navigate('/');
+  };
+
   return (
     <div className="p-3 bg-gray-900 border-b border-gray-700 flex items-center justify-between space-x-4">
-      <div className="text-lg font-semibold text-purple-400 truncate" title={projectName}>
-        {projectName}
+      <div className="flex items-center space-x-3">
+        <button
+          onClick={handleGoHome}
+          title="Back to Home"
+          className="p-2 rounded-md hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
+          aria-label="Back to Home"
+        >
+          <LeftArrowIcon className="w-5 h-5" />
+        </button>
+        <div className="text-lg font-semibold text-purple-400 truncate" title={projectName}>
+          {projectName}
+        </div>
       </div>
       <div className="flex items-center space-x-4">
         <button

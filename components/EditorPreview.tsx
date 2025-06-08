@@ -3,6 +3,7 @@ import CodeIcon from './icons/CodeIcon';
 import PreviewIcon from './icons/PreviewIcon';
 import ReloadIcon from './icons/ReloadIcon';
 import { getPreviewLoadingScreenHtml } from './PreviewLoadingScreen';
+import PreviewErrorModal from './PreviewErrorModal'; // Import the error modal
 
 interface EditorPreviewProps {
   projectFiles: Record<string, string>;
@@ -13,6 +14,7 @@ interface EditorPreviewProps {
   onCodeChange: (filePath: string, newCode: string) => void;
   viewMode: 'editor' | 'preview';
   onViewModeChange: (mode: 'editor' | 'preview') => void;
+  onPreviewError: (error: { message: string; stack?: string }) => void; // Callback for AI fix
 }
 
 const defaultPreviewContent = getPreviewLoadingScreenHtml();
@@ -26,55 +28,75 @@ const EditorPreview: React.FC<EditorPreviewProps> = ({
   onCodeChange,
   viewMode,
   onViewModeChange,
+  onPreviewError,
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeKey, setIframeKey] = useState<number>(Date.now());
+  const [showDelayedPreviewContent, setShowDelayedPreviewContent] = useState<boolean>(false);
+  const [currentPreviewError, setCurrentPreviewError] = useState<{ message: string; stack?: string } | null>(null);
 
   const availableFiles = Object.keys(projectFiles);
   const htmlFiles = availableFiles.filter(file => file.endsWith('.html'));
 
   const currentEditorContent = projectFiles[activeEditorFile] || '';
-  // Use project file content if available, otherwise default loading screen
-  const currentPreviewContent = projectFiles[activePreviewHtmlFile] || defaultPreviewContent;
+  const actualPreviewFileContent = projectFiles[activePreviewHtmlFile] || defaultPreviewContent;
+
+  const iframeContentToRender = (viewMode === 'preview' && !showDelayedPreviewContent) 
+    ? defaultPreviewContent 
+    : actualPreviewFileContent;
+  
+  useEffect(() => {
+    let timerId: NodeJS.Timeout;
+    if (viewMode === 'preview') {
+      setCurrentPreviewError(null); // Clear previous errors on mode switch or file change
+      setShowDelayedPreviewContent(false); 
+      setIframeKey(prevKey => prevKey + 1); 
+
+      timerId = setTimeout(() => {
+        setShowDelayedPreviewContent(true); 
+        setIframeKey(prevKey => prevKey + 1); 
+      }, 3000);
+    } else {
+      setShowDelayedPreviewContent(false); 
+      clearTimeout(timerId); 
+    }
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [viewMode, activePreviewHtmlFile, projectFiles]); // projectFiles added to reset error on AI update
 
 
   const handleReloadPreview = () => {
-    setIframeKey(Date.now());
+    setCurrentPreviewError(null); // Clear error on manual reload
+    if (viewMode === 'preview') {
+        setShowDelayedPreviewContent(false);
+        setIframeKey(prevKey => prevKey + 1);
+        const timerId = setTimeout(() => {
+            setShowDelayedPreviewContent(true);
+            setIframeKey(prevKey => prevKey + 1);
+        }, 3000);
+        return () => clearTimeout(timerId);
+    } else {
+        setIframeKey(Date.now());
+    }
   };
   
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (viewMode === 'preview' && iframe) {
+    if (viewMode === 'preview' && iframe && showDelayedPreviewContent) {
       const handleNavigation = (event: Event) => {
         const target = event.target as HTMLAnchorElement;
-        // Check if the click originated from an anchor tag within the iframe's document body
         if (target.tagName === 'A' && target.href && iframe.contentDocument && iframe.contentDocument.body.contains(target)) {
-          
-          const targetUrl = new URL(target.href, target.baseURI); // Resolve href against baseURI of iframe doc
-
-          // Check if it's a relative link within the "same origin" (srcDoc is effectively same origin)
-          // and not an absolute link to an external site.
-          // For srcDoc, target.baseURI will be about:srcdoc or similar.
-          // We are interested in relative paths like './about.html' or 'page.html'
-          
-          let intendedPath = target.getAttribute('href'); // Get the raw href attribute
-
+          let intendedPath = target.getAttribute('href'); 
           if (intendedPath && !intendedPath.startsWith('http') && !intendedPath.startsWith('//') && !intendedPath.startsWith('mailto:') && !intendedPath.startsWith('tel:')) {
             event.preventDefault(); 
+            if (intendedPath.startsWith('./')) intendedPath = intendedPath.substring(2);
+            else if (intendedPath.startsWith('/')) intendedPath = intendedPath.substring(1);
             
-            if (intendedPath.startsWith('./')) {
-              intendedPath = intendedPath.substring(2);
-            } else if (intendedPath.startsWith('/')) {
-              // Absolute path relative to "root" of srcDoc context
-              intendedPath = intendedPath.substring(1);
-            }
-            
-            // Resolve relative path based on current activePreviewHtmlFile's directory
             const currentDirMatch = activePreviewHtmlFile.match(/^(.*\/)[^/]*$/);
             const currentDir = currentDirMatch ? currentDirMatch[1] : '';
-            // If intendedPath is already absolute-like (e.g. from root '/file.html'), currentDir shouldn't apply
             const resolvedPath = intendedPath.includes('/') ? intendedPath : (currentDir + intendedPath);
-
 
             if (projectFiles[resolvedPath] && resolvedPath.endsWith('.html')) {
               onActivePreviewHtmlFileChange(resolvedPath);
@@ -85,34 +107,61 @@ const EditorPreview: React.FC<EditorPreviewProps> = ({
         }
       };
 
+      const handleIframeError = (event: ErrorEvent | Event) => {
+        // For standard ErrorEvent
+        if (event instanceof ErrorEvent && event.message) {
+            setCurrentPreviewError({ message: event.message, stack: event.error?.stack });
+        } 
+        // Fallback for other error-like events if necessary, though less common for `window.onerror`
+        else if ('message' in event && typeof event.message === 'string') {
+             setCurrentPreviewError({ message: event.message as string });
+        } else {
+            setCurrentPreviewError({ message: 'An unknown error occurred in the preview.' });
+        }
+        // Prevent default browser error handling in console for the iframe if needed
+        // event.preventDefault(); 
+      };
+
+
       const onLoad = () => {
         try {
-          if (iframe.contentWindow && iframe.contentWindow.document) {
-            // Use capture phase for the click listener to catch it early
+          if (iframe.contentWindow) {
             iframe.contentWindow.document.addEventListener('click', handleNavigation, true);
-          } else {
-            console.warn("Cannot access iframe content document to attach navigation listeners.");
+            // Listen for errors within the iframe
+            iframe.contentWindow.onerror = (message, source, lineno, colno, error) => {
+                 setCurrentPreviewError({ 
+                    message: String(message), 
+                    stack: error?.stack || `at ${source}:${lineno}:${colno}` 
+                });
+                return true; // Prevents the browser's default error handling
+            };
           }
-        } catch (e) {
-          console.error("Error attaching navigation listeners to iframe:", e);
-        }
+        } catch (e) { console.error("Error attaching listeners to iframe:", e); }
       };
       
       iframe.addEventListener('load', onLoad);
       return () => {
-        if (iframe.contentWindow && iframe.contentWindow.document) {
-          try {
+        if (iframe.contentWindow) {
+          try { 
             iframe.contentWindow.document.removeEventListener('click', handleNavigation, true);
-          } catch (e) { /* ignore cleanup errors */ }
+            if (iframe.contentWindow.onerror) iframe.contentWindow.onerror = null;
+          } 
+          catch (e) { /* ignore */ }
         }
         iframe.removeEventListener('load', onLoad);
       };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, projectFiles, onActivePreviewHtmlFileChange, activePreviewHtmlFile, iframeKey]);
+  }, [viewMode, projectFiles, onActivePreviewHtmlFileChange, activePreviewHtmlFile, iframeKey, showDelayedPreviewContent]);
+
+  const handleFixWithAI = () => {
+    if (currentPreviewError) {
+      onPreviewError(currentPreviewError);
+      setCurrentPreviewError(null); // Close modal after initiating AI fix
+    }
+  };
 
   return (
-    <div className="h-full w-full flex flex-col bg-gray-800">
+    <div className="h-full w-full flex flex-col bg-gray-800 relative"> {/* Added relative for modal positioning */}
       <div className="flex flex-wrap items-center p-2 bg-gray-900 border-b border-gray-700 gap-2">
         <button
           onClick={() => onViewModeChange('preview')}
@@ -183,11 +232,19 @@ const EditorPreview: React.FC<EditorPreviewProps> = ({
       ) : (
         <iframe
           ref={iframeRef}
-          key={`${activePreviewHtmlFile}-${iframeKey}`}
-          srcDoc={currentPreviewContent} // Uses defaultPreviewContent if projectFiles[activePreviewHtmlFile] is empty/undefined
+          key={iframeKey} 
+          srcDoc={iframeContentToRender}
           title="Preview"
           className="flex-grow w-full h-full border-none bg-white" 
           sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        />
+      )}
+      {currentPreviewError && viewMode === 'preview' && (
+        <PreviewErrorModal
+          errorMessage={currentPreviewError.message}
+          errorStack={currentPreviewError.stack}
+          onFixWithAI={handleFixWithAI}
+          onClose={() => setCurrentPreviewError(null)}
         />
       )}
     </div>

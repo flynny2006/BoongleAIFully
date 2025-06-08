@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatSidebar from './ChatSidebar';
@@ -15,7 +14,7 @@ import {
   deleteChatMessagesAfter,
   updateProject,
   publishProject as publishProjectToSupabase,
-  getPublishedProject,
+  // getPublishedProject, // No longer used directly here
   supabase 
 } from '../services/supabaseService';
 import { AVAILABLE_MODELS } from '../constants';
@@ -24,22 +23,18 @@ import { useAuth } from '../contexts/AuthContext';
 
 // Helper function moved to module scope
 const getPublishedProjectByProjectId = async (projId: string): Promise<PublishedProject | null> => {
-  // This is a helper, actual Supabase query would be more complex if project_id isn't unique in published_projects
-  // For now, assuming you might query by project_id if you decide it should be unique there.
-  // If published_projects.id IS the public ID, we don't have it yet to fetch here.
-  // So, let's assume published_projects table has a UNIQUE constraint on project_id for simplicity.
   const { data, error } = await supabase
     .from('published_projects')
     .select('*')
     .eq('project_id', projId)
-    .maybeSingle(); // Use maybeSingle to handle 0 or 1 row
-  if (error && error.code !== 'PGRST116') throw error; // PGRST116: 0 rows (no result) is not an error here
+    .maybeSingle(); 
+  if (error && error.code !== 'PGRST116') throw error; 
   return data;
 };
 
 const ProjectPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
-  const { user, session } = useAuth();
+  const { user } = useAuth(); // session no longer needed directly here
   const navigate = useNavigate();
 
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -51,8 +46,8 @@ const ProjectPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<'editor' | 'preview'>('preview');
   const [selectedModel, setSelectedModel] = useState<ModelId>(AVAILABLE_MODELS[0].id);
 
-  const [isLoading, setIsLoading] = useState(true); // Initial loading for project data
-  const [isAISending, setIsAISending] = useState(false); // For AI responses
+  const [isLoading, setIsLoading] = useState(true); 
+  const [isAISending, setIsAISending] = useState(false); 
   const [error, setError] = useState<string | null>(null);
   const [chatSession, setChatSession] = useState<Chat | null>(null);
 
@@ -62,7 +57,7 @@ const ProjectPage: React.FC = () => {
 
 
   const initializeChat = useCallback(async (modelToUse: ModelId, history: ChatMessage[]) => {
-    setIsAISending(true); // Use isAISending for this specific loading state
+    setIsAISending(true); 
     try {
       const sessionInstance = getOrCreateChatSession(history, modelToUse);
       setChatSession(sessionInstance);
@@ -76,7 +71,7 @@ const ProjectPage: React.FC = () => {
     } finally {
       setIsAISending(false);
     }
-  }, [setChatSession, setError, setIsAISending]);
+  }, []); // Removed dependencies that might cause re-creation, ensure stability
 
 
   // Load project data
@@ -87,6 +82,7 @@ const ProjectPage: React.FC = () => {
     }
     setIsLoading(true);
     setError(null);
+    resetChatSession(); // Reset chat session when loading a new project
 
     Promise.all([
       getProjectById(projectId, user.id),
@@ -95,23 +91,45 @@ const ProjectPage: React.FC = () => {
     ]).then(async ([projectData, filesData, chatData]) => {
       if (!projectData) {
         setError("Project not found or you don't have access.");
-        navigate('/'); // Or to a 404 page
+        navigate('/'); 
         return;
       }
       setCurrentProject(projectData);
       setProjectFiles(filesData);
-      setMessages(chatData);
+      
       setSelectedModel(projectData.model_id);
-      setActiveEditorFile(projectData.active_editor_file);
-      setActivePreviewHtmlFile(projectData.active_preview_html_file);
-      setViewMode(projectData.view_mode as 'editor' | 'preview');
+      setActiveEditorFile(projectData.active_editor_file || 'index.html');
+      setActivePreviewHtmlFile(projectData.active_preview_html_file || 'index.html');
+      setViewMode(projectData.view_mode || 'preview');
 
       // Initialize chat session with loaded history and model
-      await initializeChat(projectData.model_id, chatData);
-
-      // Fetch existing publish info
+      // Messages will be set after potential initial prompt
+      // await initializeChat(projectData.model_id, chatData); // Moved to after potential initial prompt logic
+      
       const pubInfo = await getPublishedProjectByProjectId(projectId);
       setPublishedInfo(pubInfo);
+
+      // Handle initial project prompt or set messages
+      if (chatData.length === 0 && projectData) { // Only if no messages exist for THIS project
+        const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
+          project_id: projectData.id,
+          sender: 'system',
+          text: `New project: "${projectData.name}". Asking AI (${projectData.model_id}) for the first version...`,
+        };
+        const savedSysMsg = await addChatMessage(systemMessageData);
+        setMessages([savedSysMsg]); // Set system message first
+        
+        // Ensure chat is initialized before sending the first message
+        const sessionToUse = await initializeChat(projectData.model_id, [savedSysMsg]);
+        if (sessionToUse) {
+          const initialUserPrompt = `My project is named: "${projectData.name}". Description: "${projectData.description || 'Create a stylish, modern single-page application.'}". Please generate the initial HTML/React/Tailwind application. Ensure JavaScript, especially React with JSX, is correctly set up for in-browser transpilation (include React, ReactDOM, Babel). Output a simple, visually appealing landing page as 'index.html'. Focus on a great first impression.`;
+          await handleSendMessage(initialUserPrompt, sessionToUse, [savedSysMsg]); // Pass session and current messages
+        }
+      } else {
+        setMessages(chatData);
+        await initializeChat(projectData.model_id, chatData); // Initialize with existing messages
+      }
+
 
     }).catch(err => {
       console.error("Error loading project data:", err);
@@ -120,43 +138,52 @@ const ProjectPage: React.FC = () => {
       setIsLoading(false);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, user, navigate]); // initializeChat removed to avoid loop if it changes identity too often
+  }, [projectId, user, navigate]); // initializeChat removed
 
 
-  const handleSendMessage = useCallback(async (messageText: string) => {
+  const handleSendMessage = useCallback(async (messageText: string, existingSession?: Chat, currentMessages?: ChatMessage[]) => {
     if (!currentProject || !user) return;
-    let currentEffectiveSession = chatSession;
+    
+    let sessionToUse = existingSession || chatSession;
+    const messagesForHistory = currentMessages || messages;
 
-    if (!currentEffectiveSession) {
-      console.warn("handleSendMessage: chatSession state is null. Attempting to initialize.");
+    if (!sessionToUse) {
+      console.warn("handleSendMessage: chatSession is null. Attempting to initialize.");
       try {
-        currentEffectiveSession = await initializeChat(selectedModel, messages);
-      } catch (e) {setIsAISending(false); return; }
+        sessionToUse = await initializeChat(selectedModel, messagesForHistory);
+        if (!sessionToUse) {
+             setError("Failed to initialize chat session for sending message.");
+             setIsAISending(false);
+             return;
+        }
+      } catch (e) { setIsAISending(false); return; }
     }
     
     const userMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
       project_id: currentProject.id,
       sender: 'user', text: messageText,
     };
-    // Optimistically add user message, but save to DB first
+    
+    setIsAISending(true); // Set loading before DB and AI call
+    setError(null);
+    
     const savedUserMessage = await addChatMessage(userMessageData);
     setMessages(prev => [...prev, savedUserMessage]);
     
-    setIsAISending(true);
-    setError(null);
-
     try {
-      const aiProjectStructure: AIProjectStructure = await sendMessageToAI(currentEffectiveSession, messageText, selectedModel);
+      // Pass the updated history including the new user message to sendMessageToAI if it reconstructs chat
+      // Or rely on the sessionToUse (Chat object) maintaining its own history correctly
+      const aiProjectStructure: AIProjectStructure = await sendMessageToAI(sessionToUse, messageText, selectedModel);
       
       if (!aiProjectStructure || !aiProjectStructure.files || typeof aiProjectStructure.files !== 'object' || typeof aiProjectStructure.aiMessage !== 'string') {
-        throw new Error("AI response malformed.");
+        throw new Error("AI response malformed or missing essential fields.");
       }
       
       await saveProjectFiles(currentProject.id, aiProjectStructure.files);
       setProjectFiles(aiProjectStructure.files);
 
       let newEntryPoint = aiProjectStructure.entryPoint || 'index.html';
-      if (!aiProjectStructure.files[newEntryPoint]) {
+      if (!aiProjectStructure.files[newEntryPoint] || !newEntryPoint.endsWith('.html')) {
         const htmlFiles = Object.keys(aiProjectStructure.files).filter(f => f.endsWith('.html'));
         newEntryPoint = htmlFiles.length > 0 ? htmlFiles[0] : (Object.keys(aiProjectStructure.files)[0] || 'index.html');
       }
@@ -164,9 +191,17 @@ const ProjectPage: React.FC = () => {
       const prevHtmlFileExists = !!aiProjectStructure.files[activePreviewHtmlFile];
       const prevEditorFileExists = !!aiProjectStructure.files[activeEditorFile];
 
-      if (!prevHtmlFileExists) setActivePreviewHtmlFile(newEntryPoint);
-      if (!prevEditorFileExists) setActiveEditorFile(newEntryPoint);
+      const finalActivePreviewHtmlFile = prevHtmlFileExists ? activePreviewHtmlFile : newEntryPoint;
+      const finalActiveEditorFile = prevEditorFileExists ? activeEditorFile : newEntryPoint;
+
+      if (activePreviewHtmlFile !== finalActivePreviewHtmlFile) setActivePreviewHtmlFile(finalActivePreviewHtmlFile);
+      if (activeEditorFile !== finalActiveEditorFile) setActiveEditorFile(finalActiveEditorFile);
       
+      await updateProject(currentProject.id, { 
+          active_preview_html_file: finalActivePreviewHtmlFile,
+          active_editor_file: finalActiveEditorFile,
+      }); // Update project with new active files and last_modified
+
       const aiMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
         project_id: currentProject.id,
         sender: 'ai',
@@ -176,16 +211,15 @@ const ProjectPage: React.FC = () => {
       };
       const savedAiMessage = await addChatMessage(aiMessageData);
       setMessages(prev => [...prev, savedAiMessage]);
-      await updateProject(currentProject.id, {}); // Touch last_modified
 
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "Unknown AI error.";
       setError(`Failed to get AI response: ${errorMessage}`);
       const errorAiMsgData: Omit<ChatMessage, 'id'|'timestamp'> = {
         project_id: currentProject.id,
-        sender: 'ai', text: `Error: ${errorMessage}`,
+        sender: 'ai', text: `Error: ${errorMessage}. My apologies, I couldn't process that. The raw response might be in the console.`,
       };
-      const savedErrorMsg = await addChatMessage(errorAiMsgData);
+      const savedErrorMsg = await addChatMessage(errorAiMsgData); // Save error message to chat
       setMessages(prev => [...prev, savedErrorMsg]);
     } finally {
       setIsAISending(false);
@@ -193,47 +227,47 @@ const ProjectPage: React.FC = () => {
   }, [chatSession, messages, selectedModel, currentProject, user, activePreviewHtmlFile, activeEditorFile, initializeChat]);
 
 
-  // Initial project setup prompt
-   useEffect(() => {
-    if (currentProject && messages.length === 0 && user) { // Only if no messages exist for this project
-      const setupProject = async () => {
-        try {
-          // Check if chat is initialized already for the current model
-          let sessionToUse = chatSession;
-          if (!sessionToUse) {
-            sessionToUse = await initializeChat(currentProject.model_id, []);
-          }
-          
-          const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-            project_id: currentProject.id,
-            sender: 'system',
-            text: `New project: "${currentProject.name}". Asking AI (${currentProject.model_id}) for the first version...`,
-          };
-          const savedSysMsg = await addChatMessage(systemMessageData);
-          setMessages(prev => [savedSysMsg, ...prev]);
-
-          const initialUserPrompt = `My project is named: "${currentProject.name}". The description is: "${currentProject.description || 'No specific description provided yet.'}". Please generate the initial HTML/React/Tailwind application using model ${currentProject.model_id}. Ensure JavaScript, especially React with JSX, is correctly set up with Babel for in-browser transpilation. Output a simple, stylish landing page.`;
-          
-          // Ensure system message state is set before calling handleSendMessage
-          // which relies on 'messages' state for history
-          setTimeout(() => {
-             handleSendMessage(initialUserPrompt);
-          }, 0);
-
-        } catch (e) {
-          // Error handling is inside initializeChat or handleSendMessage
-          console.error("Error during initial project setup send:", e);
-        }
-      };
-      setupProject();
+  const handlePreviewErrorForAI = useCallback(async (errorData: { message: string; stack?: string }) => {
+    if (!currentProject || !user || !activePreviewHtmlFile) {
+      setError("Cannot fix with AI: Project context or preview file is missing.");
+      return;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject, user]); // messages removed to ensure it runs only once per project load IF messages empty
+
+    const fileToFix = activePreviewHtmlFile;
+    const fileContent = projectFiles[fileToFix];
+
+    if (fileContent === undefined) {
+      setError(`Cannot fix with AI: Content for ${fileToFix} not found.`);
+      return;
+    }
+
+    const errorMessage = `The application preview encountered an error in the file '${fileToFix}'.
+Error message: "${errorData.message}"
+${errorData.stack ? `Stack trace: \n${errorData.stack}\n` : ''}
+Here is the current content of '${fileToFix}':
+\`\`\`html
+${fileContent}
+\`\`\`
+Please analyze this error and the file content, then provide the corrected full content for '${fileToFix}'. Only provide the corrected file in your response. If other files are intricately linked and need changes, you can provide them too.
+`;
+    
+    const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
+        project_id: currentProject.id,
+        sender: 'system',
+        text: `Attempting to fix error in ${fileToFix} with AI... Error: ${errorData.message}`,
+    };
+    const savedSystemMsg = await addChatMessage(systemMessageData);
+    setMessages(prev => [...prev, savedSystemMsg]);
+
+    await handleSendMessage(errorMessage);
+
+  }, [currentProject, user, activePreviewHtmlFile, projectFiles, handleSendMessage]);
 
 
   const handleModelChange = async (newModelId: ModelId) => {
     if (!currentProject || selectedModel === newModelId) return;
     
+    setIsAISending(true); // Show loading while switching
     setSelectedModel(newModelId);
     resetChatSession(); 
     
@@ -245,9 +279,17 @@ const ProjectPage: React.FC = () => {
         text: `Switched to ${AVAILABLE_MODELS.find(m => m.id === newModelId)?.name || newModelId}. AI context reset.`,
     };
     const savedSysMsg = await addChatMessage(systemMessageData);
-    setMessages(prev => [...prev, savedSysMsg]);
+    // Pass new history to initializeChat, including the system message
+    const newMessagesHistory = [...messages, savedSysMsg];
+    setMessages(newMessagesHistory);
     
-    await initializeChat(newModelId, [...messages, savedSysMsg]);
+    try {
+        await initializeChat(newModelId, newMessagesHistory);
+    } catch(e) {
+        // Error handled in initializeChat
+    } finally {
+        setIsAISending(false);
+    }
   };
 
   const handleRestoreVersion = useCallback(async (messageId: string) => {
@@ -255,13 +297,12 @@ const ProjectPage: React.FC = () => {
     const messageToRestore = messages.find(msg => msg.id === messageId);
     
     if (messageToRestore && messageToRestore.project_files_snapshot && messageToRestore.sender === 'ai') {
-      setIsAISending(true); // Use this for general loading during restore
+      setIsAISending(true); 
       setError(null);
 
       const restoreIndex = messages.findIndex(msg => msg.id === messageId);
-      const newMessagesHistory = messages.slice(0, restoreIndex + 1);
+      const newMessagesHistorySansFutureSystem = messages.slice(0, restoreIndex + 1); // Keep messages up to the one being restored
       
-      // Delete messages in DB that came after the restored message's timestamp
       const dbTimestampToRestore = new Date(messageToRestore.timestamp).toISOString();
       await deleteChatMessagesAfter(currentProject.id, dbTimestampToRestore);
 
@@ -271,25 +312,39 @@ const ProjectPage: React.FC = () => {
         text: `Restored project to version from ${new Date(messageToRestore.timestamp).toLocaleTimeString()}. AI context updated.`,
       };
       const savedSysMsg = await addChatMessage(systemRestoreMessageData);
-      setMessages([...newMessagesHistory, savedSysMsg]);
+      const finalNewMessagesHistory = [...newMessagesHistorySansFutureSystem, savedSysMsg];
+      setMessages(finalNewMessagesHistory);
       
       await saveProjectFiles(currentProject.id, messageToRestore.project_files_snapshot);
       setProjectFiles(messageToRestore.project_files_snapshot);
 
-      let entryPoint = messageToRestore.project_files_snapshot['index.html'] ? 'index.html' : Object.keys(messageToRestore.project_files_snapshot).find(f => f.endsWith('.html')) || Object.keys(messageToRestore.project_files_snapshot)[0] || 'index.html';
+      let entryPoint = 'index.html'; // Default
+      if (messageToRestore.project_files_snapshot['index.html']) {
+          // index.html exists, use it
+      } else {
+          const htmlFiles = Object.keys(messageToRestore.project_files_snapshot).filter(f => f.endsWith('.html'));
+          if (htmlFiles.length > 0) entryPoint = htmlFiles[0];
+          else if (Object.keys(messageToRestore.project_files_snapshot).length > 0) entryPoint = Object.keys(messageToRestore.project_files_snapshot)[0];
+      }
       
       setActivePreviewHtmlFile(entryPoint);
       setActiveEditorFile(entryPoint);
-      await updateProject(currentProject.id, { active_editor_file: entryPoint, active_preview_html_file: entryPoint });
+      setViewMode('preview');
+
+      await updateProject(currentProject.id, { 
+        active_editor_file: entryPoint, 
+        active_preview_html_file: entryPoint,
+        view_mode: 'preview' 
+      });
       
       resetChatSession();
-      await initializeChat(selectedModel, [...newMessagesHistory, savedSysMsg]);
-      setViewMode('preview');
-      await updateProject(currentProject.id, { view_mode: 'preview' });
+      try {
+        await initializeChat(selectedModel, finalNewMessagesHistory); // Use selectedModel (or messageToRestore.model_id_used if available and different)
+      } catch (e) { /* handled in initializeChat */ }
       
       setIsAISending(false);
     } else {
-      setError("Restore failed: Data missing.");
+      setError("Restore failed: Snapshot data missing or invalid message.");
     }
   }, [messages, selectedModel, currentProject, initializeChat]);
 
@@ -297,8 +352,7 @@ const ProjectPage: React.FC = () => {
     if(!currentProject) return;
     const updatedFiles = { ...projectFiles, [filePath]: newCode };
     setProjectFiles(updatedFiles);
-    // Debounce this or save on blur/file switch in a real app for performance
-    await saveProjectFiles(currentProject.id, updatedFiles);
+    await saveProjectFiles(currentProject.id, updatedFiles); // Debounce might be good here for performance
   }, [projectFiles, currentProject]);
 
   const handleViewModeChange = async (mode: 'editor' | 'preview') => {
@@ -315,20 +369,20 @@ const ProjectPage: React.FC = () => {
   }
 
   const handlePublish = async () => {
-    if (!currentProject || Object.keys(projectFiles).length === 0) {
-      setError("No files to publish.");
+    if (!currentProject || Object.keys(projectFiles).length === 0 || !user) {
+      setError("No files to publish or user not found.");
       return;
     }
     setIsPublishing(true);
     setError(null);
     try {
-      const entryPoint = projectFiles[activePreviewHtmlFile] ? activePreviewHtmlFile : 
+      const entryPoint = projectFiles[activePreviewHtmlFile] && activePreviewHtmlFile.endsWith('.html') ? activePreviewHtmlFile : 
                          (projectFiles['index.html'] ? 'index.html' : Object.keys(projectFiles).find(f => f.endsWith('.html')) || '');
       if (!entryPoint) {
-        throw new Error("Cannot determine HTML entry point for publishing.");
+        throw new Error("Cannot determine HTML entry point for publishing. Ensure an HTML file is set for preview or 'index.html' exists.");
       }
 
-      const published = await publishProjectToSupabase(currentProject.id, user!.id, projectFiles, entryPoint);
+      const published = await publishProjectToSupabase(currentProject.id, user.id, projectFiles, entryPoint);
       setPublishedInfo(published);
       setShowPublishModal(true);
     } catch (err: any) {
@@ -344,11 +398,13 @@ const ProjectPage: React.FC = () => {
     return <div className="flex items-center justify-center h-screen bg-black text-white"><div className="w-12 h-12 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div><p className="ml-4">Loading Project...</p></div>;
   }
   
-  if (!currentProject && !isLoading) { // Project might be null after loading if not found
-     return <div className="flex flex-col items-center justify-center h-screen bg-black text-red-400 p-4"><p>Project not found or access denied.</p><button onClick={() => navigate('/')} className="mt-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Go Home</button></div>;
+  if (!currentProject && !isLoading) { 
+     return <div className="flex flex-col items-center justify-center h-screen bg-black text-red-400 p-4"><p>{error || "Project not found or access denied."}</p><button onClick={() => navigate('/')} className="mt-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Go Home</button></div>;
   }
   
-  if (error && error.toLowerCase().includes("api key")) { /* Handled by AuthProvider effectively */ }
+  if (error && (error.toLowerCase().includes("api key") || error.toLowerCase().includes("api_key"))) { 
+      return <div className="flex flex-col items-center justify-center h-screen bg-black text-red-400 p-4"><p>API Key Error: {error}</p><p>Please ensure your Gemini API Key is correctly configured as an environment variable (<code>process.env.API_KEY</code>).</p><button onClick={() => navigate(0)} className="mt-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Reload App</button></div>;
+  }
 
 
   return (
@@ -356,7 +412,7 @@ const ProjectPage: React.FC = () => {
       <TopBar 
         selectedModel={selectedModel} 
         onModelChange={handleModelChange} 
-        isLoading={isAISending} 
+        isLoading={isAISending || isLoading} // Combine general loading with AI sending for TopBar disabling
         projectName={currentProject?.name || "Loading..."}
         onPublish={handlePublish}
         isPublished={!!publishedInfo}
@@ -382,6 +438,7 @@ const ProjectPage: React.FC = () => {
             onCodeChange={handleCodeChange}
             viewMode={viewMode}
             onViewModeChange={handleViewModeChange}
+            onPreviewError={handlePreviewErrorForAI}
           />
         </div>
       </div>

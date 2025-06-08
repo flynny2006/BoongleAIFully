@@ -88,7 +88,7 @@ const HomePage: React.FC = () => {
        await supabase.from('project_files').insert([{
          project_id: createdProject.id,
          file_path: 'index.html',
-         content: '<!DOCTYPE html><html><head><title>New Project</title></head><body><h1>Welcome!</h1></body></html>'
+         content: '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>New Project</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 text-gray-900 flex items-center justify-center h-screen"><h1 class="text-2xl">Welcome to your new project!</h1></body></html>'
        }]);
 
       setNewProjectName('');
@@ -158,7 +158,7 @@ const HomePage: React.FC = () => {
 
   // User is logged in
   return (
-    <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10">
+    <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10 overflow-y-auto">
       <div className="w-full max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold">Your Projects</h1>

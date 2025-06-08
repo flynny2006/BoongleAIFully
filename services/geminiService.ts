@@ -21,7 +21,7 @@ const getAiClient = (): GoogleGenAI => {
 
 const convertMessagesToGenAiHistory = (messages: ChatMessage[]): Content[] => {
     return messages.map(msg => {
-        if (msg.sender === 'system') return null;
+        if (msg.sender === 'system') return null; // System messages are handled by systemInstruction
         return {
             role: msg.sender === 'user' ? 'user' : 'model',
             parts: [{ text: msg.text }],
@@ -31,21 +31,23 @@ const convertMessagesToGenAiHistory = (messages: ChatMessage[]): Content[] => {
 
 
 export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: ModelId): Chat => {
-    // If activeChatSession exists AND it's for the current modelId, reuse it.
-    // Otherwise, create a new one. This handles model switching.
     if (activeChatSession && currentModelId === modelId) {
-        // Potentially update history if needed, though GenAI's Chat object handles this internally for sendMessage.
-        // For now, if session exists for model, assume it's current.
+        // TODO: Potentially update history if needed, but GenAI's Chat object handles this.
+        // For now, assume if session exists for model, it's current.
+        // Consider if history in the GenAI Chat object needs to be explicitly synced
+        // if messages were added/removed outside of sendMessage calls on this session.
+        // For now, this is okay as `resetChatSession` is called on major context changes.
         return activeChatSession;
     }
     
     console.log(`Creating new chat session for model: ${modelId}`);
     const client = getAiClient();
-    const genAiHistory = convertMessagesToGenAiHistory(chatHistory);
-    currentModelId = modelId; // Update the current model ID
+    // Only pass user/model messages for history. System prompt is separate.
+    const genAiHistory = convertMessagesToGenAiHistory(chatHistory.filter(m => m.sender !== 'system'));
+    currentModelId = modelId; 
 
     activeChatSession = client.chats.create({
-        model: modelId, // Use the passed modelId
+        model: modelId,
         config: {
             systemInstruction: AI_SYSTEM_PROMPT,
             safetySettings: [
@@ -60,7 +62,6 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
     return activeChatSession;
 };
 
-// Call this when the project fundamentally changes (new project, model switch, version restore)
 export const resetChatSession = () => {
     console.log("Resetting active chat session.");
     activeChatSession = null;
@@ -85,28 +86,32 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
                 return parsedResponse;
             } else {
                 console.error("AI response parsed but missing required fields (files, aiMessage). Response:", parsedResponse);
+                // Log the problematic string for easier debugging
+                console.error("Problematic JSON string that was parsed (but failed validation):", jsonStr);
                 return {
-                    files: { "error.txt": `AI response format error. Expected 'files' object and 'aiMessage' string. Got: ${jsonStr}` },
-                    aiMessage: "I'm having trouble formatting my response correctly. Please check the console for details or try again."
+                    files: { "error.txt": `AI response format error. Expected 'files' object and 'aiMessage' string. Got: ${jsonStr.substring(0,500)}...` },
+                    aiMessage: "I'm having trouble formatting my response correctly. It seems some expected parts are missing. Please check the console for details or try again."
                 };
             }
-        } catch (parseError) {
-            console.error("Failed to parse AI response as JSON:", parseError);
-            console.error("Raw AI response text:", rawText);
+        } catch (parseError: any) {
+            console.error("Failed to parse AI response as JSON:", parseError.message);
+            console.error("Raw AI response text (from result.text):", rawText);
+            console.error("String attempted to be parsed (after fence removal):", jsonStr); // Log the string that failed
             return {
-                files: { "error.txt": `Failed to parse AI response. Raw text: ${rawText}` },
-                aiMessage: "Sorry, I couldn't format my response correctly. Please try rephrasing your request or check the console for technical details."
+                files: { "error.txt": `Failed to parse AI response. Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
+                aiMessage: "Sorry, I couldn't understand the structure of my last thought. Please try rephrasing your request or check the console for technical details about the parsing error."
             };
         }
 
     } catch (error) {
-        console.error("Error sending message to AI:", error);
-        // Don't reset session here by default, let caller decide.
-        // resetChatSession(); 
+        console.error("Error sending message to AI or processing its response:", error);
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+        // Consider if session should be reset on all errors.
+        // For some errors (e.g. network), retrying might be fine. For others (e.g. auth), reset is needed.
+        // if (error is critical auth/quota error) resetChatSession(); 
         return {
             files: { "error.txt": `Error from AI service: ${errorMessage}` },
-            aiMessage: `Error from AI: ${errorMessage}. The chat session might be affected. Try sending your message again.`
+            aiMessage: `Oops! I encountered an issue: ${errorMessage}. The chat session might be affected. Try sending your message again, or if the problem persists, check the console.`
         };
     }
 };
