@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Chat, GenerateContentResponse, HarmCategory, HarmBlockThreshold, Content } from "@google/genai";
 import { AI_SYSTEM_PROMPT } from '../constants';
 import { ChatMessage, AIProjectStructure, ModelId } from "../types";
@@ -73,30 +74,57 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
         const result: GenerateContentResponse = await chat.sendMessage({ message });
         const rawText = result.text;
         
-        let jsonStr = rawText.trim();
-        const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
-        const match = jsonStr.match(fenceRegex);
-        if (match && match[2]) {
-          jsonStr = match[2].trim();
+        let jsonStringToParse = rawText.trim();
+
+        // First, try to extract content from ```json ... ``` or ``` ... ```
+        const fenceRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
+        const fenceMatch = jsonStringToParse.match(fenceRegex);
+
+        if (fenceMatch && fenceMatch[1]) {
+            jsonStringToParse = fenceMatch[1].trim();
+        } else {
+            const firstBrace = jsonStringToParse.indexOf('{');
+            const lastBrace = jsonStringToParse.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+                jsonStringToParse = jsonStringToParse.substring(firstBrace, lastBrace + 1).trim();
+            }
+        }
+
+        // Attempt to fix a common issue: a newline character immediately before the final closing brace or bracket.
+        // This handles cases like `{"key": "value"}\n` (though trim should catch this) 
+        // or more critically for the reported error: `{"key": "value"\n}` becoming `{"key": "value"}`.
+        let originalJsonStringForLog = jsonStringToParse; 
+        let modifiedForParsing = false;
+
+        if (jsonStringToParse.endsWith('\n}')) {
+            jsonStringToParse = jsonStringToParse.slice(0, -2) + '}';
+            modifiedForParsing = true;
+        } else if (jsonStringToParse.endsWith('\n]')) {
+            jsonStringToParse = jsonStringToParse.slice(0, -2) + ']';
+            modifiedForParsing = true;
+        }
+
+        if (modifiedForParsing) {
+            console.warn(`Attempted to fix JSON string ending with newline before brace/bracket. Original (last 30 chars): "...${originalJsonStringForLog.slice(-30)}". New (last 30 chars): "...${jsonStringToParse.slice(-30)}"`);
         }
 
         try {
-            const parsedResponse = JSON.parse(jsonStr) as AIProjectStructure;
+            const parsedResponse = JSON.parse(jsonStringToParse) as AIProjectStructure;
             if (typeof parsedResponse.files === 'object' && parsedResponse.files !== null && typeof parsedResponse.aiMessage === 'string') {
                 return parsedResponse;
             } else {
                 console.error("AI response parsed but missing required fields (files, aiMessage). Response:", parsedResponse);
-                // Log the problematic string for easier debugging
-                console.error("Problematic JSON string that was parsed (but failed validation):", jsonStr);
+                console.error("Original raw AI response text:", rawText);
+                console.error("String that was parsed (but failed validation):", jsonStringToParse);
                 return {
-                    files: { "error.txt": `AI response format error. Expected 'files' object and 'aiMessage' string. Got: ${jsonStr.substring(0,500)}...` },
+                    files: { "error.txt": `AI response format error. Expected 'files' object and 'aiMessage' string. Got: ${jsonStringToParse.substring(0,500)}...` },
                     aiMessage: "I'm having trouble formatting my response correctly. It seems some expected parts are missing. Please check the console for details or try again."
                 };
             }
         } catch (parseError: any) {
             console.error("Failed to parse AI response as JSON:", parseError.message);
-            console.error("Raw AI response text (from result.text):", rawText);
-            console.error("String attempted to be parsed (after fence removal):", jsonStr); // Log the string that failed
+            console.error("Original raw AI response text:", rawText);
+            console.error("String attempted to be parsed (after extraction and potential fix):", jsonStringToParse); 
             return {
                 files: { "error.txt": `Failed to parse AI response. Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
                 aiMessage: "Sorry, I couldn't understand the structure of my last thought. Please try rephrasing your request or check the console for technical details about the parsing error."
@@ -106,9 +134,6 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
     } catch (error) {
         console.error("Error sending message to AI or processing its response:", error);
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
-        // Consider if session should be reset on all errors.
-        // For some errors (e.g. network), retrying might be fine. For others (e.g. auth), reset is needed.
-        // if (error is critical auth/quota error) resetChatSession(); 
         return {
             files: { "error.txt": `Error from AI service: ${errorMessage}` },
             aiMessage: `Oops! I encountered an issue: ${errorMessage}. The chat session might be affected. Try sending your message again, or if the problem persists, check the console.`

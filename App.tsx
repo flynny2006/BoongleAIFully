@@ -3,8 +3,9 @@ import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import HomePage from './components/HomePage';
 import ProjectPage from './components/ProjectPage';
-import PublicSiteViewer from './components/PublicSiteViewer'; // New component
-import { AuthProvider, useAuth } from './contexts/AuthContext'; // New context
+import PublicSiteViewer from './components/PublicSiteViewer';
+import PricingPage from './components/PricingPage'; // New import
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 const AppRoutes: React.FC = () => {
   const { session, loading } = useAuth();
@@ -25,6 +26,7 @@ const AppRoutes: React.FC = () => {
         element={session ? <ProjectPage /> : <Navigate to="/" replace />} 
       />
       <Route path="/view/:publishId" element={<PublicSiteViewer />} />
+      <Route path="/pricing" element={<PricingPage />} /> {/* New route */}
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>
   );

@@ -55,7 +55,7 @@ const EditorPreview: React.FC<EditorPreviewProps> = ({
       timerId = setTimeout(() => {
         setShowDelayedPreviewContent(true); 
         setIframeKey(prevKey => prevKey + 1); 
-      }, 3000);
+      }, 350); // Changed from 3000 to 350
     } else {
       setShowDelayedPreviewContent(false); 
       clearTimeout(timerId); 
@@ -75,7 +75,7 @@ const EditorPreview: React.FC<EditorPreviewProps> = ({
         const timerId = setTimeout(() => {
             setShowDelayedPreviewContent(true);
             setIframeKey(prevKey => prevKey + 1);
-        }, 3000);
+        }, 350); // Changed from 3000 to 350
         return () => clearTimeout(timerId);
     } else {
         setIframeKey(Date.now());

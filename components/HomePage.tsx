@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -162,11 +163,18 @@ const HomePage: React.FC = () => {
       <div className="w-full max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold">Your Projects</h1>
-          <button onClick={handleLogout} disabled={authActionLoading}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white font-semibold transition-colors text-sm"
-          >
-            {authActionLoading ? 'Logging out...' : 'Logout'}
-          </button>
+          <div className="flex items-center space-x-3">
+            <button onClick={() => navigate('/pricing')}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold transition-colors text-sm"
+            >
+              Pricing
+            </button>
+            <button onClick={handleLogout} disabled={authActionLoading}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white font-semibold transition-colors text-sm"
+            >
+              {authActionLoading ? 'Logging out...' : 'Logout'}
+            </button>
+          </div>
         </div>
         
         {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm">{authError}</p>}
