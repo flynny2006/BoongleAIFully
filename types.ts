@@ -1,5 +1,5 @@
 import { AVAILABLE_MODELS } from './constants';
-import { User } from '@supabase/supabase-js';
+import { User, Session, AuthError } from '@supabase/supabase-js'; // Added AuthError for explicit typing
 
 export type ModelId = typeof AVAILABLE_MODELS[number]['id'];
 
@@ -11,6 +11,7 @@ export interface ChatMessage {
   project_files_snapshot?: Record<string, string>; // Stored as JSONB in Supabase
   timestamp: number | string; // Store as timestamptz, convert to number for client
   model_id_used?: ModelId;
+  selected_element_context?: SelectedElementDetails; // Context if a message is about a selected element
 }
 
 export interface AIProjectStructure {
@@ -46,11 +47,12 @@ export interface ProjectFile {
 // For AuthContext
 export interface AuthContextType {
   user: User | null;
-  session: import('@supabase/supabase-js').Session | null;
+  session: Session | null;
   loading: boolean;
-  login: (email: string, pass: string) => Promise<any>;
-  register: (email: string, pass: string, username: string) => Promise<any>;
+  login: (email: string, pass: string) => Promise<{ error: AuthError | null }>;
+  register: (email: string, pass: string, username: string) => Promise<{ error: AuthError | null; data?: { user: User | null; session: Session | null } }>; // Removed hCaptchaToken
   logout: () => Promise<void>;
+  verifyEmailOtp: (email: string, token: string) => Promise<{ error: AuthError | null }>; // Added OTP verification function
 }
 
 // For published projects
@@ -62,4 +64,15 @@ export interface PublishedProject {
   entry_point_file: string;
   created_at: string;
   updated_at: string;
+}
+
+// For Element Inspector
+export interface SelectedElementDetails {
+  tagName: string;
+  id: string | null;
+  classList: string[];
+  textSnippet: string | null; // First ~50 chars of innerText
+  cssSelector: string; // Generated unique CSS selector for the element
+  // A human-readable description for the AI, combining the above.
+  descriptionForAI: string; 
 }

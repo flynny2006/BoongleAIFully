@@ -23,7 +23,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
-      // No need to set loading to false here again, initial load is enough
+      // If event is 'USER_UPDATED' or 'SIGNED_IN' and email is confirmed, it means OTP was successful
+      // For instance, if _event === 'USER_UPDATED' && session?.user?.email_confirmed_at
+      if (_event === 'SIGNED_IN' && session?.user) {
+         // User signed in, could be after OTP verification
+      }
     });
 
     return () => {
@@ -38,16 +42,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return { error };
   };
 
-  const register = async (email: string, password: string, username: string): Promise<{ error: AuthError | null }> => {
+  const register = async (email: string, password: string, username: string): Promise<{ error: AuthError | null; data?: { user: User | null; session: Session | null } }> => {
     setLoading(true);
-    // Supabase needs username in options.data for the trigger to pick it up for profiles table
-    const { error } = await supabase.auth.signUp({ 
+    // Supabase will handle CAPTCHA challenge if it's configured in Supabase Auth settings.
+    const { data, error } = await supabase.auth.signUp({ 
       email, 
       password, 
-      options: { data: { username: username } } 
+      options: { 
+        data: { username: username },
+        // emailRedirectTo: window.location.origin, // Optional: for email confirmation link, not OTP usually
+      } 
     });
     setLoading(false);
-    return { error };
+    return { data: data ? { user: data.user, session: data.session } : undefined, error };
   };
 
   const logout = async (): Promise<void> => {
@@ -58,6 +65,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLoading(false);
   };
 
+  const verifyEmailOtp = async (email: string, token: string): Promise<{ error: AuthError | null }> => {
+    setLoading(true);
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'signup' });
+    // On successful verification, Supabase typically updates the user's email_confirmed_at status
+    // and the onAuthStateChange listener will receive an event (often USER_UPDATED or SIGNED_IN).
+    // The session might be updated, logging the user in.
+    setLoading(false);
+    return { error };
+  };
+
   const value = {
     user,
     session,
@@ -65,6 +82,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     login,
     register,
     logout,
+    verifyEmailOtp, // Added here
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

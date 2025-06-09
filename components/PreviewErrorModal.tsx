@@ -1,4 +1,5 @@
-import React from 'react';
+
+import React, { useState, useEffect } from 'react';
 import AlertTriangleIcon from './icons/AlertTriangleIcon';
 
 interface PreviewErrorModalProps {
@@ -14,6 +15,29 @@ const PreviewErrorModal: React.FC<PreviewErrorModalProps> = ({
   onFixWithAI,
   onClose,
 }) => {
+  const [copyButtonText, setCopyButtonText] = useState('Copy Error');
+
+  useEffect(() => {
+    if (copyButtonText === 'Copied!') {
+      const timer = setTimeout(() => {
+        setCopyButtonText('Copy Error');
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [copyButtonText]);
+
+  const handleCopyError = () => {
+    const errorDetails = `Error: ${errorMessage}\n\n${errorStack ? `Stack Trace:\n${errorStack}` : 'No stack trace available.'}`;
+    navigator.clipboard.writeText(errorDetails)
+      .then(() => {
+        setCopyButtonText('Copied!');
+      })
+      .catch(err => {
+        console.error('Failed to copy error details:', err);
+        setCopyButtonText('Copy Failed');
+      });
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
@@ -28,28 +52,37 @@ const PreviewErrorModal: React.FC<PreviewErrorModalProps> = ({
             Build Unsuccessful
           </h3>
         </div>
-        <p className="text-gray-300 mb-2">An error occurred in the preview:</p>
-        <div className="bg-gray-900 p-3 rounded-md mb-4 max-h-32 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
-          <p className="text-red-300 text-sm font-mono whitespace-pre-wrap break-all">
+        
+        <p className="text-gray-300 mb-1 text-sm">The application preview encountered an error:</p>
+        <div className="bg-gray-900 p-3 rounded-md mb-4 max-h-32 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800 border border-gray-700">
+          <p className="text-red-300 text-sm font-mono whitespace-pre-wrap break-words">
             {errorMessage}
           </p>
         </div>
+
         {errorStack && (
           <>
-            <p className="text-gray-400 mb-1 text-sm">Stack Trace:</p>
-            <div className="bg-gray-900 p-3 rounded-md mb-6 max-h-48 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
-              <pre className="text-gray-400 text-xs font-mono whitespace-pre-wrap break-all">
+            <p className="text-gray-300 mb-1 text-sm">Stack Trace:</p>
+            <div className="bg-gray-900 p-3 rounded-md mb-6 max-h-48 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800 border border-gray-700">
+              <pre className="text-gray-400 text-xs font-mono whitespace-pre-wrap break-words">
                 {errorStack}
               </pre>
             </div>
           </>
         )}
+        
         <div className="flex flex-col sm:flex-row sm:justify-end sm:space-x-3 space-y-3 sm:space-y-0">
           <button
             onClick={onFixWithAI}
             className="w-full sm:w-auto px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50"
           >
             Fix with AI
+          </button>
+          <button
+            onClick={handleCopyError}
+            className="w-full sm:w-auto px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+          >
+            {copyButtonText}
           </button>
           <button
             onClick={onClose}

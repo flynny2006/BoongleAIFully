@@ -40,12 +40,12 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
         // For now, this is okay as `resetChatSession` is called on major context changes.
         return activeChatSession;
     }
-    
+
     console.log(`Creating new chat session for model: ${modelId}`);
     const client = getAiClient();
     // Only pass user/model messages for history. System prompt is separate.
     const genAiHistory = convertMessagesToGenAiHistory(chatHistory.filter(m => m.sender !== 'system'));
-    currentModelId = modelId; 
+    currentModelId = modelId;
 
     activeChatSession = client.chats.create({
         model: modelId,
@@ -66,14 +66,14 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
 export const resetChatSession = () => {
     console.log("Resetting active chat session.");
     activeChatSession = null;
-    currentModelId = null; 
+    currentModelId = null;
 };
 
 export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?: ModelId): Promise<AIProjectStructure> => {
     try {
         const result: GenerateContentResponse = await chat.sendMessage({ message });
         const rawText = result.text;
-        
+
         let jsonStringToParse = rawText.trim();
 
         // First, try to extract content from ```json ... ``` or ``` ... ```
@@ -91,9 +91,7 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
         }
 
         // Attempt to fix a common issue: a newline character immediately before the final closing brace or bracket.
-        // This handles cases like `{"key": "value"}\n` (though trim should catch this) 
-        // or more critically for the reported error: `{"key": "value"\n}` becoming `{"key": "value"}`.
-        let originalJsonStringForLog = jsonStringToParse; 
+        let originalJsonStringForLog = jsonStringToParse;
         let modifiedForParsing = false;
 
         if (jsonStringToParse.endsWith('\n}')) {
@@ -124,10 +122,10 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
         } catch (parseError: any) {
             console.error("Failed to parse AI response as JSON:", parseError.message);
             console.error("Original raw AI response text:", rawText);
-            console.error("String attempted to be parsed (after extraction and potential fix):", jsonStringToParse); 
+            console.error("String attempted to be parsed (after extraction and potential fix):", jsonStringToParse);
             return {
-                files: { "error.txt": `Failed to parse AI response. Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
-                aiMessage: "Sorry, I couldn't understand the structure of my last thought. Please try rephrasing your request or check the console for technical details about the parsing error."
+                files: { "error.txt": `Failed to parse AI response. This usually means the JSON was malformed (e.g., unescaped quotes, backslashes, or newlines in code). Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
+                aiMessage: "I seem to have made a mistake in formatting my last response as valid JSON. This often happens with unescaped characters like quotes (\"), backslashes (\\), or newlines (\\n) within the code I generate. Please ensure all strings, especially code, are perfectly escaped. I'll try to be more careful. Could you please repeat your last request? The console might have more details about the malformed JSON."
             };
         }
 

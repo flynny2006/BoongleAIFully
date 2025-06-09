@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect, FormEvent, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, createProject, getUserProjects } from '../services/supabaseService';
@@ -9,16 +9,25 @@ import { resetChatSession } from '../services/geminiService';
 
 
 const HomePage: React.FC = () => {
-  const { user, session, login, register, logout, loading: authLoading } = useAuth();
+  const { user, session, login, register, logout, verifyEmailOtp, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   // Auth form states
   const [email, setEmail] = useState('');
+  const [registeredEmail, setRegisteredEmail] = useState(''); // Store email used for registration for OTP
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState(''); // For registration
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccessMessage, setAuthSuccessMessage] = useState<string | null>(null);
   const [authActionLoading, setAuthActionLoading] = useState(false);
+
+  // OTP state
+  const [showOtpInput, setShowOtpInput] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
 
   // Project states
   const [projects, setProjects] = useState<Project[]>([]);
@@ -38,54 +47,98 @@ const HomePage: React.FC = () => {
           setAuthError("Could not load your projects.");
         })
         .finally(() => setProjectsLoading(false));
+      setShowOtpInput(false); // Hide OTP if user is now logged in
     } else {
-      setProjects([]); // Clear projects if user logs out
+      setProjects([]);
     }
   }, [user, session]);
+
 
   const handleAuthSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setAuthActionLoading(true);
     setAuthError(null);
-    let authPromise;
+    setAuthSuccessMessage(null);
+    setOtpError(null);
+
     if (isRegisterMode) {
       if (!username.trim()) {
         setAuthError("Username is required for registration.");
         setAuthActionLoading(false);
         return;
       }
-      authPromise = register(email, password, username);
-    } else {
-      authPromise = login(email, password);
-    }
-    const { error } = await authPromise;
-    if (error) {
-      setAuthError(error.message);
-    } else {
-      // Success, redirect or update UI will be handled by AuthContext effect
-      setEmail(''); setPassword(''); setUsername(''); // Clear form
+      if (email.includes('+')) {
+        setAuthError("Email addresses cannot contain '+' characters.");
+        setAuthActionLoading(false);
+        return;
+      }
+      // Manual hCaptcha token check is removed. Supabase handles CAPTCHA if configured.
+
+      const { data: signUpData, error } = await register(email, password, username);
+      if (error) {
+        setAuthError(error.message);
+      } else if (signUpData?.user) {
+        if (signUpData.user.identities && signUpData.user.identities.length > 0 && !signUpData.user.email_confirmed_at) {
+            setAuthSuccessMessage(`Registration successful! A verification code has been sent to ${email}. Please enter it below.`);
+            setRegisteredEmail(email);
+            setShowOtpInput(true);
+        } else if (signUpData.user.email_confirmed_at) {
+            setAuthSuccessMessage("Registration successful and email confirmed!");
+        } else {
+            setAuthSuccessMessage("Registration successful! Proceed to login.");
+        }
+      }
+    } else { // Login mode
+      const { error } = await login(email, password);
+      if (error) {
+        setAuthError(error.message);
+      }
     }
     setAuthActionLoading(false);
   };
+
+  const handleVerifyOtpSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!otp.trim() || !registeredEmail) {
+      setOtpError("Please enter the 6-digit code.");
+      return;
+    }
+    setIsVerifyingOtp(true);
+    setOtpError(null);
+    const { error } = await verifyEmailOtp(registeredEmail, otp);
+    if (error) {
+      setOtpError(error.message);
+    } else {
+      setAuthSuccessMessage("Email verified successfully! You are now logged in.");
+      setShowOtpInput(false);
+      setOtp('');
+    }
+    setIsVerifyingOtp(false);
+  };
+
+  const handleSkipOtp = () => {
+    setShowOtpInput(false);
+    setAuthSuccessMessage("Registration complete. You can verify your email later. Please log in.");
+    setIsRegisterMode(false);
+  }
 
   const handleCreateNewProject = async (e: FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim() || !user) return;
     setProjectCreationLoading(true);
     setAuthError(null);
-    resetChatSession(); 
+    resetChatSession();
 
     try {
       const createdProject = await createProject({
         name: newProjectName.trim(),
-        description: `New project: ${newProjectName.trim()}`, // Initial description
+        description: `New project: ${newProjectName.trim()}`,
         model_id: newProjectModel,
         active_editor_file: 'index.html',
         active_preview_html_file: 'index.html',
         view_mode: 'preview',
       }, user.id);
-      
-      // Create a default index.html for the new project
+
        await supabase.from('project_files').insert([{
          project_id: createdProject.id,
          file_path: 'index.html',
@@ -101,7 +154,7 @@ const HomePage: React.FC = () => {
       setProjectCreationLoading(false);
     }
   };
-  
+
   const handleLogout = async () => {
     setAuthActionLoading(true);
     await logout();
@@ -109,7 +162,7 @@ const HomePage: React.FC = () => {
     navigate('/');
   }
 
-  if (authLoading) {
+  if (authLoading && !showOtpInput) {
     return (
       <div className="flex items-center justify-center h-screen bg-black text-white">
         <div className="w-12 h-12 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>
@@ -118,17 +171,49 @@ const HomePage: React.FC = () => {
   }
 
   if (!session || !user) {
+    if (showOtpInput) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
+          <h1 className="text-4xl md:text-5xl font-bold mb-8 text-center">Verify Your Email</h1>
+          <form onSubmit={handleVerifyOtpSubmit} className="w-full max-w-sm p-8 bg-gray-800 rounded-lg shadow-xl">
+            <h2 className="text-xl font-semibold mb-4 text-center text-purple-400">Enter Verification Code</h2>
+            {authSuccessMessage && <p className="mb-3 text-green-400 bg-green-900 p-2 rounded text-sm">{authSuccessMessage}</p>}
+            {otpError && <p className="mb-3 text-red-400 bg-red-900 p-2 rounded text-sm">{otpError}</p>}
+            <input
+              type="text"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+              placeholder="6-digit code"
+              maxLength={6}
+              className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none text-center tracking-[0.5em]"
+            />
+            <button type="submit" disabled={isVerifyingOtp || !otp.trim() || otp.length < 6}
+              className="w-full p-3 bg-purple-600 hover:bg-purple-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
+            >
+              {isVerifyingOtp ? 'Verifying...' : 'Verify Email'}
+            </button>
+            <button type="button" onClick={handleSkipOtp}
+              className="w-full mt-4 text-sm text-purple-400 hover:text-purple-300"
+            >
+              Skip for now
+            </button>
+          </form>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
         <h1 className="text-4xl md:text-5xl font-bold mb-8 text-center">AI Software Engineer Studio</h1>
         <form onSubmit={handleAuthSubmit} className="w-full max-w-sm p-8 bg-gray-800 rounded-lg shadow-xl">
           <h2 className="text-2xl font-semibold mb-6 text-center text-purple-400">{isRegisterMode ? 'Register New Account' : 'Login'}</h2>
           {authError && <p className="mb-4 text-red-400 bg-red-900 p-2 rounded text-sm">{authError}</p>}
-          
+          {authSuccessMessage && !showOtpInput && <p className="mb-4 text-green-400 bg-green-900 p-2 rounded text-sm">{authSuccessMessage}</p>}
+
           {isRegisterMode && (
             <input
               type="text" value={username} onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username" required
+              placeholder="Username" required={isRegisterMode}
               className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
             />
           )}
@@ -140,14 +225,19 @@ const HomePage: React.FC = () => {
           <input
             type="password" value={password} onChange={(e) => setPassword(e.target.value)}
             placeholder="Password" required
-            className="w-full p-3 mb-6 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+            className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
           />
+          {/* hCaptcha widget removed. Supabase will handle it if configured. */}
           <button type="submit" disabled={authActionLoading}
             className="w-full p-3 bg-purple-600 hover:bg-purple-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
           >
             {authActionLoading ? (isRegisterMode ? 'Registering...' : 'Logging in...') : (isRegisterMode ? 'Register' : 'Login')}
           </button>
-          <button type="button" onClick={() => { setIsRegisterMode(!isRegisterMode); setAuthError(null); }}
+          <button type="button" onClick={() => {
+              setIsRegisterMode(!isRegisterMode);
+              setAuthError(null);
+              setAuthSuccessMessage(null);
+            }}
             className="w-full mt-4 text-sm text-purple-400 hover:text-purple-300"
           >
             {isRegisterMode ? 'Already have an account? Login' : "Don't have an account? Register"}
@@ -176,8 +266,10 @@ const HomePage: React.FC = () => {
             </button>
           </div>
         </div>
-        
+
         {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm">{authError}</p>}
+        {authSuccessMessage && <p className="mb-4 text-green-400 bg-green-900 p-3 rounded text-sm">{authSuccessMessage}</p>}
+
 
         {/* Create New Project Form */}
         <form onSubmit={handleCreateNewProject} className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
@@ -189,9 +281,9 @@ const HomePage: React.FC = () => {
           />
           <div className="mb-4">
             <label htmlFor="model-select-home" className="block text-sm font-medium text-gray-300 mb-1">Select AI Model:</label>
-            <select 
+            <select
               id="model-select-home"
-              value={newProjectModel} 
+              value={newProjectModel}
               onChange={(e) => setNewProjectModel(e.target.value as ModelId)}
               className="w-full p-3 bg-gray-700 border border-gray-600 rounded text-white focus:ring-purple-500 focus:border-purple-500 outline-none"
             >

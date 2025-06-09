@@ -7,6 +7,7 @@
     <title>AI Software Engineer Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Removed hCaptcha script: <script src="https://js.hcaptcha.com/1/api.js" async defer></script> -->
   <script type="importmap">
 {
   "imports": {
@@ -19,6 +20,12 @@
   }
 }
 </script>
+<style>
+  /* Ensure iframe interactions are possible during inspect mode for elementFromPoint */
+  .iframe-inspect-mode {
+    pointer-events: auto !important; 
+  }
+</style>
 <link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-black text-white h-screen overflow-hidden">

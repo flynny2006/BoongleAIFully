@@ -2,7 +2,7 @@
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import HomePage from './components/HomePage';
-import ProjectPage from './components/ProjectPage';
+import ProjectPage from './components/ProjectPage'; // Ensured this refers to the fixed ProjectPage
 import PublicSiteViewer from './components/PublicSiteViewer';
 import PricingPage from './components/PricingPage'; // New import
 import { AuthProvider, useAuth } from './contexts/AuthContext';

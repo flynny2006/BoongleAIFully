@@ -3,16 +3,19 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AVAILABLE_MODELS } from '../constants';
 import { ModelId } from '../types';
-import LeftArrowIcon from './icons/LeftArrowIcon'; // Import the new icon
+import LeftArrowIcon from './icons/LeftArrowIcon';
+import InspectIcon from './icons/InspectIcon'; // New Icon
 
 interface TopBarProps {
   selectedModel: ModelId;
   onModelChange: (newModelId: ModelId) => void;
-  isLoading: boolean; // General loading state, e.g., for AI
+  isLoading: boolean; 
   projectName: string;
   onPublish: () => void;
   isPublished: boolean;
   isPublishing: boolean;
+  isInspectModeActive: boolean; // New prop
+  onToggleInspectMode: () => void; // New prop
 }
 
 const TopBar: React.FC<TopBarProps> = ({ 
@@ -22,7 +25,9 @@ const TopBar: React.FC<TopBarProps> = ({
   projectName,
   onPublish,
   isPublished,
-  isPublishing
+  isPublishing,
+  isInspectModeActive,
+  onToggleInspectMode
 }) => {
   const navigate = useNavigate();
 
@@ -47,12 +52,22 @@ const TopBar: React.FC<TopBarProps> = ({
       </div>
       <div className="flex items-center space-x-4">
         <button
+          onClick={onToggleInspectMode}
+          title={isInspectModeActive ? "Disable Element Inspector" : "Enable Element Inspector"}
+          className={`p-2 rounded-md transition-colors
+            ${isInspectModeActive ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white'}`}
+          aria-pressed={isInspectModeActive}
+          disabled={isLoading || isPublishing}
+        >
+          <InspectIcon className="w-5 h-5" />
+        </button>
+        <button
           onClick={onPublish}
-          disabled={isPublishing || isLoading}
+          disabled={isPublishing || isLoading || isInspectModeActive} // Disable publish if inspect mode active
           className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors flex items-center
             ${isPublishing ? 'bg-gray-600 cursor-not-allowed' : 
               (isPublished ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white')}
-            disabled:opacity-70`}
+            disabled:opacity-70 disabled:cursor-not-allowed`}
         >
           {isPublishing ? (
             <>
@@ -67,7 +82,7 @@ const TopBar: React.FC<TopBarProps> = ({
             id="model-switcher"
             value={selectedModel}
             onChange={(e) => onModelChange(e.target.value as ModelId)}
-            disabled={isLoading || isPublishing || AVAILABLE_MODELS.length <= 1}
+            disabled={isLoading || isPublishing || AVAILABLE_MODELS.length <= 1 || isInspectModeActive}
             className="px-3 py-1.5 bg-gray-700 text-white rounded-md text-sm focus:ring-purple-500 focus:border-purple-500 outline-none appearance-none disabled:opacity-70 disabled:cursor-not-allowed"
             title={AVAILABLE_MODELS.length <= 1 ? "Only one model available" : "Select Gemini Model"}
           >

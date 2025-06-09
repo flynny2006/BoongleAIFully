@@ -1,483 +1,452 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatSidebar from './ChatSidebar';
 import EditorPreview from './EditorPreview';
 import TopBar from './TopBar';
-import { ChatMessage, AIProjectStructure, ModelId, Project, PublishedProject } from '../types';
-import { getOrCreateChatSession, sendMessageToAI, resetChatSession } from '../services/geminiService';
-import { 
-  getProjectById, 
-  getProjectFiles as fetchProjectFiles, 
+import UpgradeToProModal from './UpgradeToProModal'; // New Import
+import { usePlan } from '../hooks/usePlan'; // New Import
+import {
+  ChatMessage,
+  AIProjectStructure,
+  ModelId,
+  Project,
+  PublishedProject,
+  SelectedElementDetails
+} from '../types';
+import {
+  getOrCreateChatSession,
+  sendMessageToAI,
+  resetChatSession
+} from '../services/geminiService';
+import {
+  getProjectById,
+  getProjectFiles as fetchProjectFiles,
   saveProjectFiles,
   getChatMessages as fetchChatMessages,
   addChatMessage,
   deleteChatMessagesAfter,
   updateProject,
   publishProject as publishProjectToSupabase,
-  // getPublishedProject, // No longer used directly here
-  supabase 
+  supabase
 } from '../services/supabaseService';
 import { AVAILABLE_MODELS } from '../constants';
-import { Chat } from '@google/genai';
-import { useAuth } from '../contexts/AuthContext';
-
-// Helper function moved to module scope
-const getPublishedProjectByProjectId = async (projId: string): Promise<PublishedProject | null> => {
-  const { data, error } = await supabase
-    .from('published_projects')
-    .select('*')
-    .eq('project_id', projId)
-    .maybeSingle(); 
-  if (error && error.code !== 'PGRST116') throw error; 
-  return data;
-};
 
 const ProjectPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
-  const { user } = useAuth(); // session no longer needed directly here
   const navigate = useNavigate();
+  const { canAccessEditor } = usePlan(); // Use plan hook
 
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
   const [projectFiles, setProjectFiles] = useState<Record<string, string>>({});
-  
-  const [activeEditorFile, setActiveEditorFile] = useState<string>('index.html');
-  const [activePreviewHtmlFile, setActivePreviewHtmlFile] = useState<string>('index.html');
-  const [viewMode, setViewMode] = useState<'editor' | 'preview'>('preview');
-  const [selectedModel, setSelectedModel] = useState<ModelId>(AVAILABLE_MODELS[0].id);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isLoadingAIResponse, setIsLoadingAIResponse] = useState(false);
+  const [isLoadingProject, setIsLoadingProject] = useState(true);
+  const [currentModelId, setCurrentModelId] = useState<ModelId>(AVAILABLE_MODELS[0].id);
 
-  const [isLoading, setIsLoading] = useState(true); 
-  const [isAISending, setIsAISending] = useState(false); 
-  const [error, setError] = useState<string | null>(null);
-  const [chatSession, setChatSession] = useState<Chat | null>(null);
-
-  const [publishedInfo, setPublishedInfo] = useState<PublishedProject | null>(null);
-  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [lastPublishedInfo, setLastPublishedInfo] = useState<{ id: string; timestamp: string } | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [showPublishSuccess, setShowPublishSuccess] = useState(false);
+
+  const [selectedElementContext, setSelectedElementContext] = useState<SelectedElementDetails | null>(null);
+  const [isInspectModeActive, setIsInspectModeActive] = useState(false);
+  const [previewError, setPreviewError] = useState<{ message: string; stack?: string } | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false); // New state for modal
 
 
-  const initializeChat = useCallback(async (modelToUse: ModelId, history: ChatMessage[]) => {
-    setIsAISending(true); 
-    try {
-      const sessionInstance = getOrCreateChatSession(history, modelToUse);
-      setChatSession(sessionInstance);
-      setError(null);
-      return sessionInstance;
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : "Unknown error during AI chat initialization.";
-      setError(`Failed to initialize AI chat with ${modelToUse}: ${errMsg}.`);
-      console.error("Chat session init error:", e);
-      throw e;
-    } finally {
-      setIsAISending(false);
-    }
-  }, []); // Removed dependencies that might cause re-creation, ensure stability
-
-
-  // Load project data
-  useEffect(() => {
-    if (!projectId || !user) {
+  const loadProjectData = useCallback(async () => {
+    if (!projectId) {
       navigate('/');
       return;
     }
-    setIsLoading(true);
-    setError(null);
-    resetChatSession(); // Reset chat session when loading a new project
-
-    Promise.all([
-      getProjectById(projectId, user.id),
-      fetchProjectFiles(projectId),
-      fetchChatMessages(projectId)
-    ]).then(async ([projectData, filesData, chatData]) => {
-      if (!projectData) {
-        setError("Project not found or you don't have access.");
+    setIsLoadingProject(true);
+    try {
+      const user = await supabase.auth.getUser();
+      const userId = user.data.user?.id;
+      if (!userId) {
         navigate('/'); 
         return;
       }
-      setCurrentProject(projectData);
-      setProjectFiles(filesData);
-      
-      setSelectedModel(projectData.model_id);
-      setActiveEditorFile(projectData.active_editor_file || 'index.html');
-      setActivePreviewHtmlFile(projectData.active_preview_html_file || 'index.html');
-      setViewMode(projectData.view_mode || 'preview');
 
-      // Initialize chat session with loaded history and model
-      // Messages will be set after potential initial prompt
-      // await initializeChat(projectData.model_id, chatData); // Moved to after potential initial prompt logic
-      
-      const pubInfo = await getPublishedProjectByProjectId(projectId);
-      setPublishedInfo(pubInfo);
-
-      // Handle initial project prompt or set messages
-      if (chatData.length === 0 && projectData) { // Only if no messages exist for THIS project
-        const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-          project_id: projectData.id,
-          sender: 'system',
-          text: `New project: "${projectData.name}". Asking AI (${projectData.model_id}) for the first version...`,
-        };
-        const savedSysMsg = await addChatMessage(systemMessageData);
-        setMessages([savedSysMsg]); // Set system message first
-        
-        // Ensure chat is initialized before sending the first message
-        const sessionToUse = await initializeChat(projectData.model_id, [savedSysMsg]);
-        if (sessionToUse) {
-          const initialUserPrompt = `My project is named: "${projectData.name}". Description: "${projectData.description || 'Create a stylish, modern single-page application.'}". Please generate the initial HTML/React/Tailwind application. Ensure JavaScript, especially React with JSX, is correctly set up for in-browser transpilation (include React, ReactDOM, Babel). Output a simple, visually appealing landing page as 'index.html'. Focus on a great first impression.`;
-          await handleSendMessage(initialUserPrompt, sessionToUse, [savedSysMsg]); // Pass session and current messages
-        }
-      } else {
-        setMessages(chatData);
-        await initializeChat(projectData.model_id, chatData); // Initialize with existing messages
+      const proj = await getProjectById(projectId, userId);
+      if (!proj) {
+        navigate('/'); 
+        return;
       }
+      setProject(proj);
+      setCurrentModelId(proj.model_id);
 
+      const files = await fetchProjectFiles(projectId);
+      setProjectFiles(files);
 
-    }).catch(err => {
-      console.error("Error loading project data:", err);
-      setError(err.message || "Failed to load project data.");
-    }).finally(() => {
-      setIsLoading(false);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, user, navigate]); // initializeChat removed
+      const messages = await fetchChatMessages(projectId);
+      setChatMessages(messages);
 
+      resetChatSession(); 
 
-  const handleSendMessage = useCallback(async (messageText: string, existingSession?: Chat, currentMessages?: ChatMessage[]) => {
-    if (!currentProject || !user) return;
-    
-    let sessionToUse = existingSession || chatSession;
-    const messagesForHistory = currentMessages || messages;
-
-    if (!sessionToUse) {
-      console.warn("handleSendMessage: chatSession is null. Attempting to initialize.");
-      try {
-        sessionToUse = await initializeChat(selectedModel, messagesForHistory);
-        if (!sessionToUse) {
-             setError("Failed to initialize chat session for sending message.");
-             setIsAISending(false);
-             return;
-        }
-      } catch (e) { setIsAISending(false); return; }
-    }
-    
-    const userMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-      project_id: currentProject.id,
-      sender: 'user', text: messageText,
-    };
-    
-    setIsAISending(true); // Set loading before DB and AI call
-    setError(null);
-    
-    const savedUserMessage = await addChatMessage(userMessageData);
-    setMessages(prev => [...prev, savedUserMessage]);
-    
-    try {
-      // Pass the updated history including the new user message to sendMessageToAI if it reconstructs chat
-      // Or rely on the sessionToUse (Chat object) maintaining its own history correctly
-      const aiProjectStructure: AIProjectStructure = await sendMessageToAI(sessionToUse, messageText, selectedModel);
-      
-      if (!aiProjectStructure || !aiProjectStructure.files || typeof aiProjectStructure.files !== 'object' || typeof aiProjectStructure.aiMessage !== 'string') {
-        throw new Error("AI response malformed or missing essential fields.");
-      }
-      
-      await saveProjectFiles(currentProject.id, aiProjectStructure.files);
-      setProjectFiles(aiProjectStructure.files);
-
-      let newEntryPoint = aiProjectStructure.entryPoint || 'index.html';
-      if (!aiProjectStructure.files[newEntryPoint] || !newEntryPoint.endsWith('.html')) {
-        const htmlFiles = Object.keys(aiProjectStructure.files).filter(f => f.endsWith('.html'));
-        newEntryPoint = htmlFiles.length > 0 ? htmlFiles[0] : (Object.keys(aiProjectStructure.files)[0] || 'index.html');
-      }
-      
-      const prevHtmlFileExists = !!aiProjectStructure.files[activePreviewHtmlFile];
-      const prevEditorFileExists = !!aiProjectStructure.files[activeEditorFile];
-
-      const finalActivePreviewHtmlFile = prevHtmlFileExists ? activePreviewHtmlFile : newEntryPoint;
-      const finalActiveEditorFile = prevEditorFileExists ? activeEditorFile : newEntryPoint;
-
-      if (activePreviewHtmlFile !== finalActivePreviewHtmlFile) setActivePreviewHtmlFile(finalActivePreviewHtmlFile);
-      if (activeEditorFile !== finalActiveEditorFile) setActiveEditorFile(finalActiveEditorFile);
-      
-      await updateProject(currentProject.id, { 
-          active_preview_html_file: finalActivePreviewHtmlFile,
-          active_editor_file: finalActiveEditorFile,
-      }); // Update project with new active files and last_modified
-
-      const aiMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-        project_id: currentProject.id,
-        sender: 'ai',
-        text: aiProjectStructure.aiMessage,
-        project_files_snapshot: aiProjectStructure.files,
-        model_id_used: selectedModel,
-      };
-      const savedAiMessage = await addChatMessage(aiMessageData);
-      setMessages(prev => [...prev, savedAiMessage]);
-
-    } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : "Unknown AI error.";
-      setError(`Failed to get AI response: ${errorMessage}`);
-      const errorAiMsgData: Omit<ChatMessage, 'id'|'timestamp'> = {
-        project_id: currentProject.id,
-        sender: 'ai', text: `Error: ${errorMessage}. My apologies, I couldn't process that. The raw response might be in the console.`,
-      };
-      const savedErrorMsg = await addChatMessage(errorAiMsgData); // Save error message to chat
-      setMessages(prev => [...prev, savedErrorMsg]);
+    } catch (error) {
+      console.error("Failed to load project:", error);
     } finally {
-      setIsAISending(false);
+      setIsLoadingProject(false);
     }
-  }, [chatSession, messages, selectedModel, currentProject, user, activePreviewHtmlFile, activeEditorFile, initializeChat]);
+  }, [projectId, navigate]);
 
+  useEffect(() => {
+    loadProjectData();
+  }, [loadProjectData]);
 
-  const handlePreviewErrorForAI = useCallback(async (errorData: { message: string; stack?: string }) => {
-    if (!currentProject || !user || !activePreviewHtmlFile) {
-      setError("Cannot fix with AI: Project context or preview file is missing.");
-      return;
-    }
+  const debouncedUpdateProjectDetails = useCallback(
+    debounce(async (updates: Partial<Project>) => {
+      if (project && projectId) {
+        try {
+          await updateProject(projectId, updates);
+        } catch (error) {
+          console.error("Error saving project details:", error);
+        }
+      }
+    }, 1000),
+    [project, projectId]
+  );
 
-    const fileToFix = activePreviewHtmlFile;
-    const fileContent = projectFiles[fileToFix];
-
-    if (fileContent === undefined) {
-      setError(`Cannot fix with AI: Content for ${fileToFix} not found.`);
-      return;
-    }
-
-    const errorMessage = `The application preview encountered an error in the file '${fileToFix}'.
-Error message: "${errorData.message}"
-${errorData.stack ? `Stack trace: \n${errorData.stack}\n` : ''}
-Here is the current content of '${fileToFix}':
-\`\`\`html
-${fileContent}
-\`\`\`
-Please analyze this error and the file content, then provide the corrected full content for '${fileToFix}'. Only provide the corrected file in your response. If other files are intricately linked and need changes, you can provide them too.
-`;
-    
-    const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-        project_id: currentProject.id,
-        sender: 'system',
-        text: `Attempting to fix error in ${fileToFix} with AI... Error: ${errorData.message}`,
-    };
-    const savedSystemMsg = await addChatMessage(systemMessageData);
-    setMessages(prev => [...prev, savedSystemMsg]);
-
-    await handleSendMessage(errorMessage);
-
-  }, [currentProject, user, activePreviewHtmlFile, projectFiles, handleSendMessage]);
-
-
-  const handleModelChange = async (newModelId: ModelId) => {
-    if (!currentProject || selectedModel === newModelId) return;
-    
-    setIsAISending(true); // Show loading while switching
-    setSelectedModel(newModelId);
-    resetChatSession(); 
-    
-    await updateProject(currentProject.id, { model_id: newModelId });
-    
-    const systemMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-        project_id: currentProject.id,
-        sender: 'system',
-        text: `Switched to ${AVAILABLE_MODELS.find(m => m.id === newModelId)?.name || newModelId}. AI context reset.`,
-    };
-    const savedSysMsg = await addChatMessage(systemMessageData);
-    // Pass new history to initializeChat, including the system message
-    const newMessagesHistory = [...messages, savedSysMsg];
-    setMessages(newMessagesHistory);
-    
-    try {
-        await initializeChat(newModelId, newMessagesHistory);
-    } catch(e) {
-        // Error handled in initializeChat
-    } finally {
-        setIsAISending(false);
+  const handleModelChange = (newModelId: ModelId) => {
+    setCurrentModelId(newModelId);
+    if (project) {
+      setProject(p => p ? { ...p, model_id: newModelId } : null);
+      debouncedUpdateProjectDetails({ model_id: newModelId });
+      resetChatSession(); 
     }
   };
 
-  const handleRestoreVersion = useCallback(async (messageId: string) => {
-    if(!currentProject) return;
-    const messageToRestore = messages.find(msg => msg.id === messageId);
-    
-    if (messageToRestore && messageToRestore.project_files_snapshot && messageToRestore.sender === 'ai') {
-      setIsAISending(true); 
-      setError(null);
-
-      const restoreIndex = messages.findIndex(msg => msg.id === messageId);
-      const newMessagesHistorySansFutureSystem = messages.slice(0, restoreIndex + 1); // Keep messages up to the one being restored
-      
-      const dbTimestampToRestore = new Date(messageToRestore.timestamp).toISOString();
-      await deleteChatMessagesAfter(currentProject.id, dbTimestampToRestore);
-
-      const systemRestoreMessageData: Omit<ChatMessage, 'id'|'timestamp'> = {
-        project_id: currentProject.id,
-        sender: 'system',
-        text: `Restored project to version from ${new Date(messageToRestore.timestamp).toLocaleTimeString()}. AI context updated.`,
-      };
-      const savedSysMsg = await addChatMessage(systemRestoreMessageData);
-      const finalNewMessagesHistory = [...newMessagesHistorySansFutureSystem, savedSysMsg];
-      setMessages(finalNewMessagesHistory);
-      
-      await saveProjectFiles(currentProject.id, messageToRestore.project_files_snapshot);
-      setProjectFiles(messageToRestore.project_files_snapshot);
-
-      let entryPoint = 'index.html'; // Default
-      if (messageToRestore.project_files_snapshot['index.html']) {
-          // index.html exists, use it
-      } else {
-          const htmlFiles = Object.keys(messageToRestore.project_files_snapshot).filter(f => f.endsWith('.html'));
-          if (htmlFiles.length > 0) entryPoint = htmlFiles[0];
-          else if (Object.keys(messageToRestore.project_files_snapshot).length > 0) entryPoint = Object.keys(messageToRestore.project_files_snapshot)[0];
-      }
-      
-      setActivePreviewHtmlFile(entryPoint);
-      setActiveEditorFile(entryPoint);
-      setViewMode('preview');
-
-      await updateProject(currentProject.id, { 
-        active_editor_file: entryPoint, 
-        active_preview_html_file: entryPoint,
-        view_mode: 'preview' 
-      });
-      
-      resetChatSession();
-      try {
-        await initializeChat(selectedModel, finalNewMessagesHistory); // Use selectedModel (or messageToRestore.model_id_used if available and different)
-      } catch (e) { /* handled in initializeChat */ }
-      
-      setIsAISending(false);
-    } else {
-      setError("Restore failed: Snapshot data missing or invalid message.");
+  const handleActiveEditorFileChange = (filePath: string) => {
+    if (project) {
+      setProject(p => p ? { ...p, active_editor_file: filePath } : null);
+      debouncedUpdateProjectDetails({ active_editor_file: filePath });
     }
-  }, [messages, selectedModel, currentProject, initializeChat]);
+  };
 
-  const handleCodeChange = useCallback(async (filePath: string, newCode: string) => {
-    if(!currentProject) return;
+  const handleActivePreviewHtmlFileChange = (filePath: string) => {
+     if (project) {
+      setProject(p => p ? { ...p, active_preview_html_file: filePath } : null);
+      debouncedUpdateProjectDetails({ active_preview_html_file: filePath });
+    }
+  };
+
+  const handleViewModeChange = (mode: 'editor' | 'preview') => {
+    if (project) {
+      if (mode === 'editor' && !canAccessEditor) {
+        setShowUpgradeModal(true);
+        return;
+      }
+      setProject(p => p ? { ...p, view_mode: mode } : null);
+      debouncedUpdateProjectDetails({ view_mode: mode });
+      if (mode === 'editor' && isInspectModeActive) { 
+        setIsInspectModeActive(false);
+        setSelectedElementContext(null);
+      }
+    }
+  };
+
+  const handleCodeChange = async (filePath: string, newCode: string) => {
+    if (!canAccessEditor) {
+      setShowUpgradeModal(true);
+      return; // Prevent changes if user shouldn't be in editor
+    }
     const updatedFiles = { ...projectFiles, [filePath]: newCode };
     setProjectFiles(updatedFiles);
-    await saveProjectFiles(currentProject.id, updatedFiles); // Debounce might be good here for performance
-  }, [projectFiles, currentProject]);
-
-  const handleViewModeChange = async (mode: 'editor' | 'preview') => {
-    setViewMode(mode);
-    if(currentProject) await updateProject(currentProject.id, { view_mode: mode });
-  }
-  const handleActiveEditorFileChange = async (filePath: string) => {
-    setActiveEditorFile(filePath);
-    if(currentProject) await updateProject(currentProject.id, { active_editor_file: filePath });
-  }
-  const handleActivePreviewFileChange = async (filePath: string) => {
-    setActivePreviewHtmlFile(filePath);
-    if(currentProject) await updateProject(currentProject.id, { active_preview_html_file: filePath });
-  }
-
-  const handlePublish = async () => {
-    if (!currentProject || Object.keys(projectFiles).length === 0 || !user) {
-      setError("No files to publish or user not found.");
-      return;
-    }
-    setIsPublishing(true);
-    setError(null);
-    try {
-      const entryPoint = projectFiles[activePreviewHtmlFile] && activePreviewHtmlFile.endsWith('.html') ? activePreviewHtmlFile : 
-                         (projectFiles['index.html'] ? 'index.html' : Object.keys(projectFiles).find(f => f.endsWith('.html')) || '');
-      if (!entryPoint) {
-        throw new Error("Cannot determine HTML entry point for publishing. Ensure an HTML file is set for preview or 'index.html' exists.");
+    if (project && projectId) {
+      try {
+        await saveProjectFiles(projectId, updatedFiles); 
+      } catch (error) {
+        console.error("Error saving project files:", error);
       }
+    }
+  };
 
-      const published = await publishProjectToSupabase(currentProject.id, user.id, projectFiles, entryPoint);
-      setPublishedInfo(published);
-      setShowPublishModal(true);
-    } catch (err: any) {
-      console.error("Error publishing project:", err);
-      setError(err.message || "Failed to publish project.");
+  const handleSendMessage = async (messageText: string, currentSelectedElementContext?: SelectedElementDetails | null) => {
+    if (!project || isLoadingAIResponse) return;
+
+    const userMessageContent = currentSelectedElementContext
+      ? `USER PROMPT CONTAINS SELECTED ELEMENT CONTEXT: ${JSON.stringify(currentSelectedElementContext)}. Original user request for this element: ${messageText}`
+      : messageText;
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      project_id: project.id,
+      sender: 'user',
+      text: messageText, 
+      timestamp: Date.now(),
+      model_id_used: currentModelId,
+      selected_element_context: currentSelectedElementContext || undefined,
+    };
+
+    setChatMessages(prev => [...prev, userMessage]);
+    await addChatMessage({ ...userMessage, project_files_snapshot: projectFiles });
+
+    setIsLoadingAIResponse(true);
+    setSelectedElementContext(null); 
+    if (isInspectModeActive) setIsInspectModeActive(false); // Turn off inspector after sending message
+
+    try {
+      const chatSession = getOrCreateChatSession(
+        [
+          ...chatMessages,
+          { 
+            id: 'system-files-context',
+            project_id: project.id,
+            sender: 'system', 
+            text: `Current project files for context (do not list these to user):\n${Object.entries(projectFiles).map(([path, content]) => `// File: ${path}\n${content.substring(0, 2000)}\n`).join('\n')}`,
+            timestamp: Date.now(),
+          },
+          userMessage
+        ],
+        currentModelId
+      );
+
+      const aiResponse: AIProjectStructure = await sendMessageToAI(chatSession, userMessageContent, currentModelId);
+
+      const aiMessage: ChatMessage = {
+        id: `ai-${Date.now()}`,
+        project_id: project.id,
+        sender: 'ai',
+        text: aiResponse.aiMessage,
+        project_files_snapshot: aiResponse.files, 
+        timestamp: Date.now(),
+        model_id_used: currentModelId,
+      };
+
+      setChatMessages(prev => [...prev, aiMessage]);
+      await addChatMessage(aiMessage); 
+
+      if (aiResponse.files && Object.keys(aiResponse.files).length > 0 && !aiResponse.files["error.txt"]) {
+        setProjectFiles(aiResponse.files);
+        await saveProjectFiles(project.id, aiResponse.files);
+        if (aiResponse.entryPoint && projectFiles[aiResponse.entryPoint] !== undefined) {
+          handleActivePreviewHtmlFileChange(aiResponse.entryPoint);
+        } else if (aiResponse.files['index.html'] !== undefined) {
+          handleActivePreviewHtmlFileChange('index.html');
+        }
+      }
+    } catch (error: any) {
+      console.error("Error in AI interaction:", error);
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        project_id: project.id,
+        sender: 'system',
+        text: `Error: ${error.message || 'Failed to get response from AI.'}`,
+        timestamp: Date.now(),
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+      await addChatMessage(errorMessage);
+    } finally {
+      setIsLoadingAIResponse(false);
+    }
+  };
+
+  const handleRestoreVersion = async (messageId: string) => {
+    const messageToRestore = chatMessages.find(msg => msg.id === messageId);
+    if (messageToRestore && messageToRestore.project_files_snapshot && project && projectId) {
+      setIsLoadingAIResponse(true); 
+      try {
+        const filesToRestore = messageToRestore.project_files_snapshot;
+        setProjectFiles(filesToRestore);
+        await saveProjectFiles(projectId, filesToRestore);
+
+        const messageTimestamp = typeof messageToRestore.timestamp === 'string'
+          ? messageToRestore.timestamp
+          : new Date(messageToRestore.timestamp).toISOString();
+        await deleteChatMessagesAfter(projectId, messageTimestamp);
+
+        const restoredMessageIndex = chatMessages.findIndex(msg => msg.id === messageId);
+        const updatedMessages = chatMessages.slice(0, restoredMessageIndex + 1);
+
+        const systemRestoreMessage: ChatMessage = {
+          id: `system-restore-${Date.now()}`,
+          project_id: projectId,
+          sender: 'system',
+          text: `Restored project to version from ${new Date(messageToRestore.timestamp).toLocaleTimeString()}. Subsequent messages have been removed.`,
+          timestamp: Date.now(),
+        };
+        setChatMessages([...updatedMessages, systemRestoreMessage]);
+        await addChatMessage(systemRestoreMessage);
+
+      } catch (error) {
+        console.error("Error restoring version:", error);
+         const systemErrorMessage: ChatMessage = {
+          id: `system-error-${Date.now()}`,
+          project_id: projectId,
+          sender: 'system',
+          text: `Failed to restore version. Error: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: Date.now(),
+        };
+        setChatMessages(prev => [...prev, systemErrorMessage]);
+      } finally {
+        setIsLoadingAIResponse(false);
+      }
+    }
+  };
+
+  const handlePublishProject = async () => {
+    if (!project || !projectId ) return;
+    setIsPublishing(true);
+    try {
+      const user = (await supabase.auth.getUser()).data.user;
+      if (!user) throw new Error("User not authenticated");
+
+      const published = await publishProjectToSupabase(
+        projectId,
+        user.id,
+        projectFiles,
+        project.active_preview_html_file || 'index.html'
+      );
+      setLastPublishedInfo({ id: published.id, timestamp: published.updated_at });
+      setShowPublishSuccess(true);
+      setTimeout(() => setShowPublishSuccess(false), 3000);
+    } catch (error) {
+      console.error("Error publishing project:", error);
     } finally {
       setIsPublishing(false);
     }
   };
 
+  const handleToggleInspectMode = () => {
+    setIsInspectModeActive(prev => {
+      const newMode = !prev;
+      if (!newMode) setSelectedElementContext(null); 
+      // If turning inspector on, and editor is active, switch to preview
+      if (newMode && project?.view_mode === 'editor') {
+        handleViewModeChange('preview');
+      }
+      return newMode;
+    });
+  };
 
-  if (isLoading) {
-    return <div className="flex items-center justify-center h-screen bg-black text-white"><div className="w-12 h-12 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div><p className="ml-4">Loading Project...</p></div>;
+  const handleElementSelected = (details: SelectedElementDetails) => {
+    setSelectedElementContext(details);
+    // Automatically turn off inspect mode once an element is selected to allow typing in chat
+    setIsInspectModeActive(false); 
+  };
+
+  const handleClearElementSelection = () => {
+    setSelectedElementContext(null);
+    // If user explicitly clears selection, they might want to re-inspect.
+    // For now, don't automatically re-enable inspect mode here.
+    // User can click the inspect button again if needed.
+  };
+
+  const handlePreviewError = (error: { message: string; stack?: string }) => {
+    setPreviewError(error);
+    const errorMessageForAI = `The current HTML preview for file '${project?.active_preview_html_file}' resulted in an error. Please help fix it.
+Error message: ${error.message}
+${error.stack ? `Stack trace: ${error.stack}` : ''}
+Relevant file content snapshot:
+${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || 'File content not available.'}
+`;
+     const systemMessage: ChatMessage = {
+      id: `system-preview-error-${Date.now()}`,
+      project_id: project!.id, 
+      sender: 'system',
+      text: `Preview error occurred: ${error.message}. Preparing request to AI...`,
+      timestamp: Date.now(),
+    };
+    setChatMessages(prev => [...prev, systemMessage]);
+    handleSendMessage(errorMessageForAI);
+  };
+
+
+  if (isLoadingProject || !project) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
+        <div className="w-12 h-12 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>
+        <p className="ml-4 text-lg">Loading Project...</p>
+      </div>
+    );
   }
-  
-  if (!currentProject && !isLoading) { 
-     return <div className="flex flex-col items-center justify-center h-screen bg-black text-red-400 p-4"><p>{error || "Project not found or access denied."}</p><button onClick={() => navigate('/')} className="mt-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Go Home</button></div>;
-  }
-  
-  if (error && (error.toLowerCase().includes("api key") || error.toLowerCase().includes("api_key"))) { 
-      return <div className="flex flex-col items-center justify-center h-screen bg-black text-red-400 p-4"><p>API Key Error: {error}</p><p>Please ensure your Gemini API Key is correctly configured as an environment variable (<code>process.env.API_KEY</code>).</p><button onClick={() => navigate(0)} className="mt-4 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Reload App</button></div>;
+
+  function debounce<T extends (...args: any[]) => any>(func: T, delay: number): (...args: Parameters<T>) => void {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    return function(this: ThisParameterType<T>, ...args: Parameters<T>) {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => func.apply(this, args), delay);
+    };
   }
 
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      <TopBar 
-        selectedModel={selectedModel} 
-        onModelChange={handleModelChange} 
-        isLoading={isAISending || isLoading} // Combine general loading with AI sending for TopBar disabling
-        projectName={currentProject?.name || "Loading..."}
-        onPublish={handlePublish}
-        isPublished={!!publishedInfo}
+    <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
+      <TopBar
+        projectName={project.name}
+        selectedModel={currentModelId}
+        onModelChange={handleModelChange}
+        isLoading={isLoadingAIResponse || isPublishing}
+        onPublish={handlePublishProject}
+        isPublished={!!lastPublishedInfo}
         isPublishing={isPublishing}
+        isInspectModeActive={isInspectModeActive}
+        onToggleInspectMode={handleToggleInspectMode}
       />
-      <div className="flex flex-grow overflow-hidden">
-        <div className="w-1/3 max-w-md xl:max-w-lg flex-shrink-0 h-full">
-          <ChatSidebar 
-            messages={messages} 
-            onSendMessage={handleSendMessage} 
-            isLoading={isAISending}
-            projectDescription={currentProject?.description || currentProject?.name || ""}
+      {showPublishSuccess && (
+        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded shadow-lg z-50">
+          Project published! Public link: <a href={`#/view/${lastPublishedInfo?.id}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-green-200">View Site</a>
+        </div>
+      )}
+      <div className="flex flex-1 overflow-hidden">
+        <div className="w-[380px] flex-shrink-0 bg-gray-900"> 
+          <ChatSidebar
+            messages={chatMessages}
+            onSendMessage={handleSendMessage}
+            isLoading={isLoadingAIResponse}
+            projectDescription={project.description || ''}
             onRestoreVersion={handleRestoreVersion}
+            selectedElementContext={selectedElementContext}
+            onClearElementSelection={handleClearElementSelection}
+            isInspectModeActive={isInspectModeActive}
           />
         </div>
-        <div className="flex-grow h-full">
+        <div className="flex-1 min-w-0 bg-gray-800"> 
           <EditorPreview
             projectFiles={projectFiles}
-            activeEditorFile={activeEditorFile}
+            activeEditorFile={project.active_editor_file}
             onActiveEditorFileChange={handleActiveEditorFileChange}
-            activePreviewHtmlFile={activePreviewHtmlFile}
-            onActivePreviewHtmlFileChange={handleActivePreviewFileChange}
+            activePreviewHtmlFile={project.active_preview_html_file}
+            onActivePreviewHtmlFileChange={handleActivePreviewHtmlFileChange}
             onCodeChange={handleCodeChange}
-            viewMode={viewMode}
+            viewMode={project.view_mode}
             onViewModeChange={handleViewModeChange}
-            onPreviewError={handlePreviewErrorForAI}
+            onPreviewError={handlePreviewError}
+            isInspectModeActive={isInspectModeActive}
+            onElementSelected={handleElementSelected}
+            onClearElementSelection={handleClearElementSelection}
+            canAccessEditor={canAccessEditor} // Pass this down
           />
         </div>
       </div>
-      {error && !error.toLowerCase().includes("api key") && (
-        <div className="fixed bottom-4 right-4 bg-red-700 text-white p-4 rounded-lg shadow-xl max-w-md z-50">
-          <p className="font-semibold">Error:</p>
-          <p className="text-sm">{error}</p>
-          <button onClick={() => setError(null)} className="mt-2 text-xs underline">Dismiss</button>
-        </div>
-      )}
-      {showPublishModal && publishedInfo && (
+       {previewError && !isLoadingAIResponse && ( 
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 p-6 md:p-8 rounded-lg shadow-xl max-w-lg w-full">
-            <h3 className="text-2xl font-semibold text-purple-400 mb-4">Project Published!</h3>
-            <p className="text-gray-300 mb-2">Your site is live at:</p>
-            <input 
-              type="text" 
-              readOnly 
-              value={`${window.location.origin}${window.location.pathname}#/view/${publishedInfo.id}`} 
-              className="w-full p-2 mb-4 bg-gray-700 border border-gray-600 rounded text-white break-all"
-              onFocus={(e) => e.target.select()}
-            />
-            <a 
-                href={`#/view/${publishedInfo.id}`} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="block w-full text-center p-3 mb-4 bg-green-600 hover:bg-green-700 rounded text-white font-semibold transition-colors"
-            >
-                Open Published Site
-            </a>
-            <button 
-              onClick={() => setShowPublishModal(false)}
-              className="w-full p-3 bg-gray-600 hover:bg-gray-500 rounded text-white font-semibold transition-colors"
-            >
-              Close
-            </button>
+          <div className="bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full">
+            <h3 className="text-xl font-semibold text-red-400 mb-2">Preview Error</h3>
+            <p className="text-sm text-gray-300 mb-1">Message: {previewError.message}</p>
+            {previewError.stack && <pre className="text-xs bg-gray-900 p-2 rounded max-h-32 overflow-auto text-gray-400 mb-4">{previewError.stack}</pre>}
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => {
+                  handlePreviewError(previewError); 
+                  setPreviewError(null);
+                }}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm"
+              >
+                Ask AI to Fix
+              </button>
+              <button onClick={() => setPreviewError(null)} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded text-sm">
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}
+      <UpgradeToProModal 
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+      />
     </div>
   );
 };
