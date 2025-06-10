@@ -35,15 +35,11 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
     if (activeChatSession && currentModelId === modelId) {
         // TODO: Potentially update history if needed, but GenAI's Chat object handles this.
         // For now, assume if session exists for model, it's current.
-        // Consider if history in the GenAI Chat object needs to be explicitly synced
-        // if messages were added/removed outside of sendMessage calls on this session.
-        // For now, this is okay as `resetChatSession` is called on major context changes.
         return activeChatSession;
     }
 
     console.log(`Creating new chat session for model: ${modelId}`);
     const client = getAiClient();
-    // Only pass user/model messages for history. System prompt is separate.
     const genAiHistory = convertMessagesToGenAiHistory(chatHistory.filter(m => m.sender !== 'system'));
     currentModelId = modelId;
 
@@ -76,13 +72,35 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
 
         let jsonStringToParse = rawText.trim();
 
-        // First, try to extract content from ```json ... ``` or ``` ... ```
         const fenceRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
         const fenceMatch = jsonStringToParse.match(fenceRegex);
 
         if (fenceMatch && fenceMatch[1]) {
-            jsonStringToParse = fenceMatch[1].trim();
+            jsonStringToParse = fenceMatch[1].trim(); // Extracted from fence
+
+            // Enhanced cleanup: If the extracted string doesn't cleanly start with { and end with },
+            // try to find the main JSON object within it. This handles cases like "{...} trailing junk"
+            // or "leading junk {...}" or "leading junk {...} trailing junk" inside the fence.
+            if (!(jsonStringToParse.startsWith('{') && jsonStringToParse.endsWith('}'))) {
+                const firstBrace = jsonStringToParse.indexOf('{');
+                const lastBrace = jsonStringToParse.lastIndexOf('}');
+
+                if (firstBrace !== -1 && lastBrace > firstBrace) {
+                    const candidate = jsonStringToParse.substring(firstBrace, lastBrace + 1);
+                    // Check if the candidate itself looks like a clean JSON object string
+                    if (candidate.startsWith('{') && candidate.endsWith('}')) {
+                        console.warn(`Cleaned potentially malformed JSON string by isolating content between first '{' and last '}'. Original from fence (trimmed, ends with "...${jsonStringToParse.slice(-50)}"). New (ends with "...${candidate.slice(-50)}")`);
+                        jsonStringToParse = candidate;
+                    } else {
+                         console.warn(`Could not reliably isolate a clean JSON object from fence content: "${jsonStringToParse.substring(0,100)}..."`);
+                    }
+                } else {
+                     console.warn(`Fence content, after initial trim, did not appear to contain a main JSON object structure: "${jsonStringToParse.substring(0,100)}..."`);
+                }
+            }
         } else {
+            // Fallback if no fence found: try to find the first '{' and last '}' in the raw text.
+            // jsonStringToParse is rawText.trim() at this point.
             const firstBrace = jsonStringToParse.indexOf('{');
             const lastBrace = jsonStringToParse.lastIndexOf('}');
             if (firstBrace !== -1 && lastBrace > firstBrace) {
@@ -90,20 +108,23 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
             }
         }
 
-        // Attempt to fix a common issue: a newline character immediately before the final closing brace or bracket.
-        let originalJsonStringForLog = jsonStringToParse;
-        let modifiedForParsing = false;
+        // Attempt to fix a common issue: a newline character immediately before the final closing brace.
+        // This fix should run AFTER the primary JSON object isolation.
+        let originalJsonStringForLog = jsonStringToParse; 
+        let modifiedByNewlineFix = false;
 
         if (jsonStringToParse.endsWith('\n}')) {
             jsonStringToParse = jsonStringToParse.slice(0, -2) + '}';
-            modifiedForParsing = true;
-        } else if (jsonStringToParse.endsWith('\n]')) {
-            jsonStringToParse = jsonStringToParse.slice(0, -2) + ']';
-            modifiedForParsing = true;
-        }
+            modifiedByNewlineFix = true;
+        } 
+        // Our top-level structure is always an object, so checking for \n] is less critical but harmless.
+        // else if (jsonStringToParse.endsWith('\n]')) { 
+        //     jsonStringToParse = jsonStringToParse.slice(0, -2) + ']';
+        //     modifiedByNewlineFix = true;
+        // }
 
-        if (modifiedForParsing) {
-            console.warn(`Attempted to fix JSON string ending with newline before brace/bracket. Original (last 30 chars): "...${originalJsonStringForLog.slice(-30)}". New (last 30 chars): "...${jsonStringToParse.slice(-30)}"`);
+        if (modifiedByNewlineFix) {
+            console.warn(`Attempted to fix JSON string ending with newline before brace. Original (last 30 chars): "...${originalJsonStringForLog.slice(-30)}". New (last 30 chars): "...${jsonStringToParse.slice(-30)}"`);
         }
 
         try {
@@ -122,10 +143,10 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
         } catch (parseError: any) {
             console.error("Failed to parse AI response as JSON:", parseError.message);
             console.error("Original raw AI response text:", rawText);
-            console.error("String attempted to be parsed (after extraction and potential fix):", jsonStringToParse);
+            console.error("String attempted to be parsed (after extraction and potential fixes):", jsonStringToParse);
             return {
-                files: { "error.txt": `Failed to parse AI response. This usually means the JSON was malformed (e.g., unescaped quotes, backslashes, or newlines in code). Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
-                aiMessage: "I seem to have made a mistake in formatting my last response as valid JSON. This often happens with unescaped characters like quotes (\"), backslashes (\\), or newlines (\\n) within the code I generate. Please ensure all strings, especially code, are perfectly escaped. I'll try to be more careful. Could you please repeat your last request? The console might have more details about the malformed JSON."
+                files: { "error.txt": `Failed to parse AI response. This usually means the JSON was malformed (e.g., unescaped quotes, backslashes, or newlines in code, or extraneous characters). Error: ${parseError.message}. Raw text (first 500 chars): ${rawText.substring(0,500)}...` },
+                aiMessage: "I seem to have made a mistake in formatting my last response as valid JSON. This can happen with unescaped characters or if extra text was accidentally included. I'll try to be more careful. Could you please repeat your last request? The console might have more details about the malformed JSON."
             };
         }
 

@@ -3,15 +3,15 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LeftArrowIcon from './icons/LeftArrowIcon';
 import CheckCircleIcon from './icons/CheckCircleIcon';
-import { usePlan, PlanTier } from '../hooks/usePlan'; // New import
+import { usePlan, PlanTier } from '../hooks/usePlan';
 
 const PricingPage: React.FC = () => {
   const navigate = useNavigate();
-  const { plan: currentPlan, setPlan, claimProWithCode } = usePlan();
+  const { plan: currentPlan, claimPlanWithCode } = usePlan(); // Updated to use claimPlanWithCode
   const [claimCode, setClaimCode] = useState('');
   const [claimMessage, setClaimMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const plansConfig: Array<{name: string, id: PlanTier, price: string, priceSuffix: string, features: string[], ctaBase: string, color: string, isPopular: boolean}> = [
+  const plansConfig: Array<{name: string, id: PlanTier, price: string, priceSuffix: string, features: string[], ctaBase: string, color: string, isPopular: boolean, detailsAction?: () => void}> = [
     {
       name: 'FREE',
       id: 'FREE',
@@ -58,45 +58,35 @@ const PricingPage: React.FC = () => {
     },
   ];
 
-  const getButtonClass = (color: string, isActive: boolean) => {
+  const getButtonClass = (color: string, isActive: boolean, isClickable: boolean) => {
     if (isActive) {
-      return 'bg-gray-500 cursor-default';
+      return 'bg-gray-500 cursor-default text-gray-300';
+    }
+    if (!isClickable) {
+      return 'bg-gray-600 hover:bg-gray-700 focus:ring-gray-500 text-white opacity-80 cursor-not-allowed';
     }
     switch (color) {
-      case 'blue': return 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500';
-      case 'purple': return 'bg-purple-600 hover:bg-purple-700 focus:ring-purple-500';
-      case 'green': return 'bg-green-600 hover:bg-green-700 focus:ring-green-500';
-      default: return 'bg-gray-600 hover:bg-gray-700 focus:ring-gray-500';
-    }
-  };
-
-  const handlePlanSelect = (selectedPlanId: PlanTier) => {
-    if (currentPlan !== selectedPlanId) {
-      setPlan(selectedPlanId);
-      setClaimMessage({type: 'success', text: `Successfully switched to ${selectedPlanId} plan!`});
-      setTimeout(() => setClaimMessage(null), 3000);
+      case 'blue': return 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 text-white';
+      case 'purple': return 'bg-purple-600 hover:bg-purple-700 focus:ring-purple-500 text-white';
+      case 'green': return 'bg-green-600 hover:bg-green-700 focus:ring-green-500 text-white';
+      default: return 'bg-gray-600 hover:bg-gray-700 focus:ring-gray-500 text-white';
     }
   };
   
   const getPlanButtonText = (planId: PlanTier, ctaBase: string): string => {
     if (currentPlan === planId) return "Current Plan";
-    
-    const planOrder: PlanTier[] = ['FREE', 'PRO', 'PREMIUM'];
-    const currentIndex = planOrder.indexOf(currentPlan);
-    const selectedIndex = planOrder.indexOf(planId);
-
-    if (selectedIndex < currentIndex) return `Downgrade to ${planId}`;
-    return ctaBase; // Or "Upgrade to..."
+    return ctaBase;
   };
 
   const handleClaimCode = () => {
-    if (claimProWithCode(claimCode)) {
-      setClaimMessage({ type: 'success', text: 'PRO plan claimed successfully!' });
+    const newPlan = claimPlanWithCode(claimCode);
+    if (newPlan) {
+      setClaimMessage({ type: 'success', text: `Successfully switched to ${newPlan} plan!` });
       setClaimCode('');
     } else {
-      setClaimMessage({ type: 'error', text: 'Invalid claim code.' });
+      setClaimMessage({ type: 'error', text: 'Invalid or unrecognized claim code.' });
     }
-    setTimeout(() => setClaimMessage(null), 3000);
+    setTimeout(() => setClaimMessage(null), 4000);
   };
 
 
@@ -105,7 +95,7 @@ const PricingPage: React.FC = () => {
       <div className="w-full max-w-5xl mx-auto">
         <div className="mb-10 flex items-center justify-between">
           <button
-            onClick={() => navigate(-1)} // Go back to previous page
+            onClick={() => navigate(-1)}
             title="Back"
             className="p-2 rounded-md hover:bg-gray-700 text-gray-300 hover:text-white transition-colors flex items-center"
             aria-label="Back"
@@ -116,12 +106,14 @@ const PricingPage: React.FC = () => {
            <h1 className="text-3xl md:text-4xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500 flex-grow">
             Choose Your Plan
           </h1>
-          <div className="w-auto" style={{minWidth: "100px"}}></div> {/* Spacer for true centering of title */}
+          <div className="w-auto" style={{minWidth: "100px"}}></div>
         </div>
 
-        {/* Claim Code Section */}
         <div className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl max-w-md mx-auto">
           <h2 className="text-xl font-semibold mb-3 text-center text-purple-400">Have a Claim Code?</h2>
+          <p className="text-sm text-gray-400 mb-4 text-center">
+            Switch or upgrade your plan by entering a valid claim code.
+          </p>
           {claimMessage && (
             <p className={`mb-3 p-2 rounded text-sm text-center ${claimMessage.type === 'success' ? 'bg-green-700 text-green-200' : 'bg-red-700 text-red-200'}`}>
               {claimMessage.text}
@@ -131,14 +123,14 @@ const PricingPage: React.FC = () => {
             <input
               type="text"
               value={claimCode}
-              onChange={(e) => setClaimCode(e.target.value.trim())}
-              placeholder="Enter code (e.g., 3636)"
+              onChange={(e) => setClaimCode(e.target.value.trim().toUpperCase())}
+              placeholder="Enter your Claim Code"
               className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
             />
             <button
               onClick={handleClaimCode}
               disabled={!claimCode}
-              className="p-3 bg-yellow-500 hover:bg-yellow-600 rounded text-black font-semibold transition-colors disabled:bg-gray-600 disabled:text-gray-400"
+              className="p-3 bg-yellow-500 hover:bg-yellow-600 rounded text-black font-semibold transition-colors disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed"
             >
               Claim
             </button>
@@ -172,9 +164,10 @@ const PricingPage: React.FC = () => {
                 ))}
               </ul>
               <button 
-                onClick={() => handlePlanSelect(planItem.id)}
-                disabled={currentPlan === planItem.id}
-                className={`w-full mt-auto p-3 font-semibold text-white rounded-lg shadow-md hover:shadow-lg transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-opacity-75 ${getButtonClass(planItem.color, currentPlan === planItem.id)}`}
+                disabled={currentPlan === planItem.id || !planItem.detailsAction} 
+                onClick={planItem.detailsAction} 
+                className={`w-full mt-auto p-3 font-semibold rounded-lg shadow-md hover:shadow-lg transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-opacity-75 ${getButtonClass(planItem.color, currentPlan === planItem.id, !!planItem.detailsAction)}`}
+                title={currentPlan === planItem.id ? "This is your current plan." : (planItem.detailsAction ? `Learn more about ${planItem.name}` : "Plan selection via Claim Code only.")}
               >
                 {getPlanButtonText(planItem.id, planItem.ctaBase)}
               </button>
@@ -182,7 +175,7 @@ const PricingPage: React.FC = () => {
           ))}
         </div>
         <p className="text-center text-gray-500 mt-12 text-sm">
-          All prices are in USD. Plans are for illustrative purposes only. Manage your plan via localStorage.
+          All prices are in USD. Plans are illustrative. Use claim codes to change your plan.
         </p>
       </div>
     </div>

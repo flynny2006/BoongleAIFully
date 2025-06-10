@@ -55,13 +55,55 @@ export const updateProject = async (projectId: string, updates: Partial<Project>
   return data;
 };
 
-export const deleteProject = async (projectId: string): Promise<void> => {
-  const { error } = await supabase
+// Updated function to delete project and all its related data
+export const deleteProjectAndRelatedData = async (projectId: string, userId: string): Promise<void> => {
+  // Verify user owns the project before deletion (optional, but good practice if not handled by RLS)
+  const project = await getProjectById(projectId, userId);
+  if (!project) {
+    throw new Error("Project not found or user does not have permission to delete it.");
+  }
+
+  // 1. Delete related published projects
+  const { error: deletePublishedError } = await supabase
+    .from('published_projects')
+    .delete()
+    .eq('project_id', projectId);
+  if (deletePublishedError) {
+    console.error("Error deleting published project data:", deletePublishedError);
+    throw new Error(`Failed to delete published project data: ${deletePublishedError.message}`);
+  }
+
+  // 2. Delete related chat messages
+  const { error: deleteMessagesError } = await supabase
+    .from('chat_messages')
+    .delete()
+    .eq('project_id', projectId);
+  if (deleteMessagesError) {
+    console.error("Error deleting chat messages:", deleteMessagesError);
+    throw new Error(`Failed to delete chat messages: ${deleteMessagesError.message}`);
+  }
+
+  // 3. Delete related project files
+  const { error: deleteFilesError } = await supabase
+    .from('project_files')
+    .delete()
+    .eq('project_id', projectId);
+  if (deleteFilesError) {
+    console.error("Error deleting project files:", deleteFilesError);
+    throw new Error(`Failed to delete project files: ${deleteFilesError.message}`);
+  }
+
+  // 4. Delete the project itself
+  const { error: deleteProjectError } = await supabase
     .from('projects')
     .delete()
     .eq('id', projectId);
-  if (error) throw error;
+  if (deleteProjectError) {
+    console.error("Error deleting project:", deleteProjectError);
+    throw new Error(`Failed to delete project: ${deleteProjectError.message}`);
+  }
 };
+
 
 // --- Project File Functions ---
 export const getProjectFiles = async (projectId: string): Promise<Record<string, string>> => {

@@ -1,12 +1,17 @@
 
-import React, { useState, useEffect, FormEvent, useRef } from 'react';
+import React, { useState, useEffect, FormEvent, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, createProject, getUserProjects } from '../services/supabaseService';
+import { supabase, createProject, getUserProjects, deleteProjectAndRelatedData, updateProject } from '../services/supabaseService';
 import { Project, ModelId } from '../types';
 import { AVAILABLE_MODELS } from '../constants';
 import { resetChatSession } from '../services/geminiService';
+import DeleteIcon from './icons/DeleteIcon';
+import SearchIcon from './icons/SearchIcon';
+import EditIcon from './icons/EditIcon'; // New import
+import EditProjectModal from './EditProjectModal'; // New import
 
+type SortOrder = 'recent' | 'oldest' | 'alphabetical';
 
 const HomePage: React.FC = () => {
   const { user, session, login, register, logout, verifyEmailOtp, loading: authLoading } = useAuth();
@@ -14,9 +19,9 @@ const HomePage: React.FC = () => {
 
   // Auth form states
   const [email, setEmail] = useState('');
-  const [registeredEmail, setRegisteredEmail] = useState(''); // Store email used for registration for OTP
+  const [registeredEmail, setRegisteredEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [username, setUsername] = useState(''); // For registration
+  const [username, setUsername] = useState('');
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccessMessage, setAuthSuccessMessage] = useState<string | null>(null);
@@ -28,18 +33,29 @@ const HomePage: React.FC = () => {
   const [otpError, setOtpError] = useState<string | null>(null);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
-
   // Project states
   const [projects, setProjects] = useState<Project[]>([]);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectModel, setNewProjectModel] = useState<ModelId>(AVAILABLE_MODELS[0].id);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectCreationLoading, setProjectCreationLoading] = useState(false);
+  const [projectDeletionLoading, setProjectDeletionLoading] = useState<string | null>(null);
+
+  // Search and Sort state
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('recent');
+
+  // Edit Project Modal state
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [isSavingProjectDetails, setIsSavingProjectDetails] = useState(false);
 
 
   useEffect(() => {
     if (user && session) {
       setProjectsLoading(true);
+      setAuthError(null); 
+      setAuthSuccessMessage(null);
       getUserProjects(user.id)
         .then(setProjects)
         .catch(err => {
@@ -47,12 +63,11 @@ const HomePage: React.FC = () => {
           setAuthError("Could not load your projects.");
         })
         .finally(() => setProjectsLoading(false));
-      setShowOtpInput(false); // Hide OTP if user is now logged in
+      setShowOtpInput(false);
     } else {
       setProjects([]);
     }
   }, [user, session]);
-
 
   const handleAuthSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -72,8 +87,6 @@ const HomePage: React.FC = () => {
         setAuthActionLoading(false);
         return;
       }
-      // Manual hCaptcha token check is removed. Supabase handles CAPTCHA if configured.
-
       const { data: signUpData, error } = await register(email, password, username);
       if (error) {
         setAuthError(error.message);
@@ -88,7 +101,7 @@ const HomePage: React.FC = () => {
             setAuthSuccessMessage("Registration successful! Proceed to login.");
         }
       }
-    } else { // Login mode
+    } else {
       const { error } = await login(email, password);
       if (error) {
         setAuthError(error.message);
@@ -115,7 +128,7 @@ const HomePage: React.FC = () => {
     }
     setIsVerifyingOtp(false);
   };
-
+  
   const handleSkipOtp = () => {
     setShowOtpInput(false);
     setAuthSuccessMessage("Registration complete. You can verify your email later. Please log in.");
@@ -127,6 +140,7 @@ const HomePage: React.FC = () => {
     if (!newProjectName.trim() || !user) return;
     setProjectCreationLoading(true);
     setAuthError(null);
+    setAuthSuccessMessage(null);
     resetChatSession();
 
     try {
@@ -146,6 +160,9 @@ const HomePage: React.FC = () => {
        }]);
 
       setNewProjectName('');
+      setAuthSuccessMessage(`Project "${createdProject.name}" created!`);
+      // Add to local state and re-sort
+      setProjects(prev => [createdProject, ...prev]);
       navigate(`/project/${createdProject.id}`);
     } catch (err: any) {
       console.error("Error creating project:", err);
@@ -155,12 +172,89 @@ const HomePage: React.FC = () => {
     }
   };
 
+  const handleDeleteProject = async (projectId: string, projectName: string) => {
+    if (window.confirm(`Are you sure you want to delete the project "${projectName}"? This action cannot be undone.`)) {
+      setProjectDeletionLoading(projectId);
+      setAuthError(null);
+      setAuthSuccessMessage(null);
+      try {
+        await deleteProjectAndRelatedData(projectId, user!.id);
+        setProjects(prevProjects => prevProjects.filter(p => p.id !== projectId));
+        setAuthSuccessMessage(`Project "${projectName}" deleted successfully.`);
+      } catch (err: any) {
+        console.error("Error deleting project:", err);
+        setAuthError(err.message || "Failed to delete project.");
+      } finally {
+        setProjectDeletionLoading(null);
+      }
+    }
+  };
+
+  const handleOpenEditModal = (project: Project) => {
+    setEditingProject(project);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setEditingProject(null);
+    setIsEditModalOpen(false);
+  };
+
+  const handleSaveProjectDetails = async (projectId: string, newName: string, newDescription: string) => {
+    if (!user) return;
+    setIsSavingProjectDetails(true);
+    setAuthError(null);
+    setAuthSuccessMessage(null);
+    try {
+      const updatedProjectData = await updateProject(projectId, { name: newName, description: newDescription });
+      setProjects(prevProjects => prevProjects.map(p => p.id === projectId ? updatedProjectData : p));
+      setAuthSuccessMessage(`Project "${newName}" updated successfully.`);
+      handleCloseEditModal();
+    } catch (err: any) {
+      console.error("Error updating project details:", err);
+      setAuthError(err.message || "Failed to update project details.");
+      // Optionally keep modal open on error: // handleCloseEditModal();
+    } finally {
+      setIsSavingProjectDetails(false);
+    }
+  };
+
+
   const handleLogout = async () => {
     setAuthActionLoading(true);
     await logout();
     setAuthActionLoading(false);
+    setSearchTerm('');
+    setSortOrder('recent');
     navigate('/');
   }
+
+  const sortedAndFilteredProjects = useMemo(() => {
+    let result = [...projects];
+
+    // Filter
+    if (searchTerm.trim()) {
+      result = result.filter(proj =>
+        proj.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (proj.description && proj.description.toLowerCase().includes(searchTerm.toLowerCase()))
+      );
+    }
+
+    // Sort
+    switch (sortOrder) {
+      case 'recent':
+        result.sort((a, b) => new Date(b.last_modified).getTime() - new Date(a.last_modified).getTime());
+        break;
+      case 'oldest':
+        result.sort((a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime());
+        break;
+      case 'alphabetical':
+        result.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        break;
+    }
+    return result;
+  }, [projects, searchTerm, sortOrder]);
+
 
   if (authLoading && !showOtpInput) {
     return (
@@ -180,11 +274,9 @@ const HomePage: React.FC = () => {
             {authSuccessMessage && <p className="mb-3 text-green-400 bg-green-900 p-2 rounded text-sm">{authSuccessMessage}</p>}
             {otpError && <p className="mb-3 text-red-400 bg-red-900 p-2 rounded text-sm">{otpError}</p>}
             <input
-              type="text"
-              value={otp}
+              type="text" value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
-              placeholder="6-digit code"
-              maxLength={6}
+              placeholder="6-digit code" maxLength={6}
               className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none text-center tracking-[0.5em]"
             />
             <button type="submit" disabled={isVerifyingOtp || !otp.trim() || otp.length < 6}
@@ -227,7 +319,6 @@ const HomePage: React.FC = () => {
             placeholder="Password" required
             className="w-full p-3 mb-4 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
           />
-          {/* hCaptcha widget removed. Supabase will handle it if configured. */}
           <button type="submit" disabled={authActionLoading}
             className="w-full p-3 bg-purple-600 hover:bg-purple-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
           >
@@ -249,7 +340,7 @@ const HomePage: React.FC = () => {
 
   // User is logged in
   return (
-    <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10 overflow-y-auto">
+    <div className="flex flex-col items-center h-screen bg-black text-white p-4 pt-10 overflow-y-auto">
       <div className="w-full max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold">Your Projects</h1>
@@ -267,9 +358,8 @@ const HomePage: React.FC = () => {
           </div>
         </div>
 
-        {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm">{authError}</p>}
-        {authSuccessMessage && <p className="mb-4 text-green-400 bg-green-900 p-3 rounded text-sm">{authSuccessMessage}</p>}
-
+        {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm" role="alert">{authError}</p>}
+        {authSuccessMessage && <p className="mb-4 text-green-400 bg-green-900 p-3 rounded text-sm" role="status">{authSuccessMessage}</p>}
 
         {/* Create New Project Form */}
         <form onSubmit={handleCreateNewProject} className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
@@ -299,33 +389,94 @@ const HomePage: React.FC = () => {
           </button>
         </form>
 
+        {/* Search and Sort Controls */}
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:space-x-4 space-y-4 sm:space-y-0">
+          <div className="relative flex-grow">
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search projects by name or description..."
+              className="w-full p-3 pl-10 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+              aria-label="Search projects"
+            />
+            <SearchIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+          </div>
+          <div className="flex-shrink-0">
+            <label htmlFor="sort-order" className="sr-only">Sort projects by</label>
+            <select
+              id="sort-order"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+              className="w-full sm:w-auto p-3 bg-gray-700 border border-gray-600 rounded text-white focus:ring-purple-500 focus:border-purple-500 outline-none"
+            >
+              <option value="recent">Sort by: Recent</option>
+              <option value="oldest">Sort by: Oldest</option>
+              <option value="alphabetical">Sort by: Alphabetical (A-Z)</option>
+            </select>
+          </div>
+        </div>
+
+
         {/* Projects List */}
         {projectsLoading ? (
           <div className="text-center py-8">
             <div className="inline-block w-8 h-8 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>
             <p className="mt-2 text-gray-400">Loading projects...</p>
           </div>
-        ) : projects.length === 0 ? (
-          <p className="text-center text-gray-500 py-8">You don't have any projects yet. Create one above!</p>
+        ) : sortedAndFilteredProjects.length === 0 ? (
+          <p className="text-center text-gray-500 py-8">
+            {searchTerm ? `No projects found matching "${searchTerm}".` : "You don't have any projects yet. Create one above!"}
+          </p>
         ) : (
           <div className="space-y-4">
-            {projects.map(proj => (
+            {sortedAndFilteredProjects.map(proj => (
               <div key={proj.id} className="p-5 bg-gray-800 rounded-lg shadow-lg border border-gray-700 hover:border-purple-500 transition-all">
                 <h3 className="text-xl font-semibold text-purple-400 mb-1">{proj.name}</h3>
                 <p className="text-sm text-gray-400 mb-3 truncate" title={proj.description || ''}>{proj.description || 'No description'}</p>
                 <p className="text-xs text-gray-500 mb-1">Model: {AVAILABLE_MODELS.find(m=>m.id === proj.model_id)?.name || proj.model_id}</p>
                 <p className="text-xs text-gray-500 mb-3">Last Modified: {new Date(proj.last_modified).toLocaleString()}</p>
-                <button
-                  onClick={() => navigate(`/project/${proj.id}`)}
-                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white font-medium transition-colors text-sm"
-                >
-                  Open Project
-                </button>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => navigate(`/project/${proj.id}`)}
+                    className="px-5 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white font-medium transition-colors text-sm"
+                  >
+                    Open Project
+                  </button>
+                   <button
+                    onClick={() => handleOpenEditModal(proj)}
+                    className="p-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors text-sm"
+                    title="Edit Project Details"
+                    aria-label={`Edit project ${proj.name}`}
+                  >
+                    <EditIcon className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteProject(proj.id, proj.name)}
+                    disabled={projectDeletionLoading === proj.id}
+                    className="p-2 bg-red-600 hover:bg-red-700 rounded text-white transition-colors text-sm disabled:bg-gray-600"
+                    title="Delete Project"
+                    aria-label={`Delete project ${proj.name}`}
+                  >
+                    {projectDeletionLoading === proj.id ? (
+                      <div className="w-5 h-5 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
+                    ) : (
+                      <DeleteIcon className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+      <EditProjectModal
+        isOpen={isEditModalOpen}
+        project={editingProject}
+        onSave={handleSaveProjectDetails}
+        onClose={handleCloseEditModal}
+        isSaving={isSavingProjectDetails}
+      />
     </div>
   );
 };
