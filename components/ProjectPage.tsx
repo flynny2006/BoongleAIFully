@@ -40,7 +40,7 @@ function debounce<T extends (...args: any[]) => any>(func: T, delay: number): (.
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => func.apply(this, args), delay);
   };
-} // REMOVED Semicolon from here
+}
 
 const ProjectPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -64,6 +64,17 @@ const ProjectPage: React.FC = () => {
 
   const [activeUITab, setActiveUITab] = useState<'editor' | 'preview' | 'terminal'>('preview');
   const [terminalOutput, setTerminalOutput] = useState<TerminalLine[]>([]);
+  
+  const [applyAiChanges, setApplyAiChanges] = useState<boolean>(true); // New state for chat mode
+
+  const handleToggleApplyAiChanges = () => { // Handler for the toggle
+    setApplyAiChanges(prev => !prev);
+    if (!applyAiChanges) { // If turning ON "Apply AI Changes"
+        addTerminalLine("AI changes will now be applied to the project.", 'system');
+    } else { // If turning OFF "Apply AI Changes" (entering chat-only mode)
+        addTerminalLine("Chat-Only Mode activated. AI file changes will not be applied.", 'system');
+    }
+  };
 
   const addTerminalLine = useCallback((line: string, type: TerminalLine['type']) => {
     setTerminalOutput(prev => [...prev, { line, type, timestamp: Date.now() }]);
@@ -75,17 +86,16 @@ const ProjectPage: React.FC = () => {
   }, [addTerminalLine]);
 
   const simulateNpmRunDev = useCallback(async () => {
-    setIsLoadingAIResponse(true); // Disable terminal input during simulation
+    setIsLoadingAIResponse(true); 
     addTerminalLine("Starting build process...", 'system');
     await new Promise(resolve => setTimeout(resolve, 300));
     
-    // Simulate npm install (approx 3-4 seconds)
     addTerminalLine("npm install", 'input');
     await new Promise(resolve => setTimeout(resolve, 200));
     addTerminalLine(">", 'output');
     const packages = Math.floor(Math.random() * 50) + 1200; 
     const contributors = Math.floor(Math.random() * 20) + 70; 
-    const installTime = (Math.random() * 1.5 + 2.5).toFixed(2); // 2.5s to 4.0s
+    const installTime = (Math.random() * 1.5 + 2.5).toFixed(2); 
 
     addTerminalLine("resolving packages...", 'output');
     await new Promise(resolve => setTimeout(resolve, 700));
@@ -106,7 +116,6 @@ const ProjectPage: React.FC = () => {
     addTerminalLine("found 0 vulnerabilities", 'output');
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Simulate npm run dev (Vite style)
     addTerminalLine("npm run dev", 'input');
     await new Promise(resolve => setTimeout(resolve, 200));
     addTerminalLine(">", 'output');
@@ -224,27 +233,48 @@ const ProjectPage: React.FC = () => {
     const userMessageForLocalState: ChatMessage = { id: `user-${Date.now()}`, project_id: project.id, sender: 'user', text: messageText, timestamp: Date.now(), model_id_used: currentModelId, selected_element_context: currentSelectedElementContext || undefined, };
     setChatMessages(prev => [...prev, userMessageForLocalState]);
     addTerminalLine(`Sending prompt to AI: "${messageText.substring(0, 50).replace(/\n/g, ' ')}..."`, 'system');
+    // Ensure project_files_snapshot for user message reflects current state *before* AI response
     await addChatMessage({ project_id: project.id, sender: 'user', text: messageText, model_id_used: currentModelId, selected_element_context: currentSelectedElementContext || undefined, project_files_snapshot: projectFiles });
     setIsLoadingAIResponse(true); setSelectedElementContext(null); if (isInspectModeActive) setIsInspectModeActive(false); 
     try {
       const chatSession = getOrCreateChatSession([...chatMessages, userMessageForLocalState], currentModelId);
       const aiResponse: AIProjectStructure = await sendMessageToAI(chatSession, userMessageContent, currentModelId);
-      const aiMessageForLocalState: ChatMessage = { id: `ai-${Date.now()}`, project_id: project.id, sender: 'ai', text: aiResponse.aiMessage, project_files_snapshot: aiResponse.files, timestamp: Date.now(), model_id_used: currentModelId };
+      
+      // Always create AI message for local state and DB with its intended files
+      const aiMessageForLocalState: ChatMessage = { 
+        id: `ai-${Date.now()}`, 
+        project_id: project.id, 
+        sender: 'ai', 
+        text: aiResponse.aiMessage, 
+        project_files_snapshot: aiResponse.files, // AI's intended files
+        timestamp: Date.now(), 
+        model_id_used: currentModelId 
+      };
       setChatMessages(prev => [...prev, aiMessageForLocalState]);
-      const { id: _aiId, timestamp: _aiTs, ...aiMessageDataForDb } = aiMessageForLocalState; await addChatMessage(aiMessageDataForDb); 
-      if (aiResponse.files && Object.keys(aiResponse.files).length > 0 ) {
-        if (aiResponse.files["error.txt"]) {
-            addTerminalLine(`[-] Failed: AI Error - ${aiResponse.files["error.txt"]}`, 'error');
-        } else {
-            setProjectFiles(aiResponse.files); await saveProjectFiles(project.id, aiResponse.files);
-            addTerminalLine("[+] Successful Prompt.", 'success');
-            await simulateNpmRunDev(); 
-            if (aiResponse.entryPoint && aiResponse.files[aiResponse.entryPoint] !== undefined) handleActivePreviewHtmlFileChange(aiResponse.entryPoint);
-            else if (aiResponse.files['index.html'] !== undefined) handleActivePreviewHtmlFileChange('index.html');
+      const { id: _aiId, timestamp: _aiTs, ...aiMessageDataForDb } = aiMessageForLocalState; 
+      await addChatMessage(aiMessageDataForDb); 
+
+      // Only apply changes if applyAiChanges mode is ON
+      if (applyAiChanges) {
+        if (aiResponse.files && Object.keys(aiResponse.files).length > 0 ) {
+          if (aiResponse.files["error.txt"]) {
+              addTerminalLine(`[-] Failed: AI Error - ${aiResponse.files["error.txt"]}`, 'error');
+          } else {
+              setProjectFiles(aiResponse.files); 
+              await saveProjectFiles(project.id, aiResponse.files);
+              addTerminalLine("[+] Successful Prompt. Files applied.", 'success');
+              await simulateNpmRunDev(); 
+              if (aiResponse.entryPoint && aiResponse.files[aiResponse.entryPoint] !== undefined) handleActivePreviewHtmlFileChange(aiResponse.entryPoint);
+              else if (aiResponse.files['index.html'] !== undefined) handleActivePreviewHtmlFileChange('index.html');
+          }
+        } else if (!aiResponse.files || Object.keys(aiResponse.files).length === 0) {
+          addTerminalLine(`[-] AI responded, but no files were returned. AI Message: ${aiResponse.aiMessage}`, 'error');
         }
-      } else if (!aiResponse.files || Object.keys(aiResponse.files).length === 0) {
-        addTerminalLine(`[-] AI responded, but no files were returned. AI Message: ${aiResponse.aiMessage}`, 'error');
+      } else {
+        // Chat-only mode: AI responded, files not applied.
+        addTerminalLine(`AI response received (Chat-Only Mode): "${aiResponse.aiMessage.substring(0, 70).replace(/\n/g, ' ')}..." Files not applied.`, 'system');
       }
+
     } catch (error: any) {
       console.error("Error in AI interaction:", error);
       const systemErrorMessageForLocalState: ChatMessage = { id: `error-${Date.now()}`, project_id: project.id, sender: 'system', text: `Error: ${error.message || 'Failed to get response from AI.'}`, timestamp: Date.now() };
@@ -256,6 +286,16 @@ const ProjectPage: React.FC = () => {
 
   const handleRestoreVersion = async (messageId: string) => { 
     const messageToRestore = chatMessages.find(msg => msg.id === messageId);
+    // Ensure applyAiChanges is true before restoring
+    if (!applyAiChanges) {
+        addTerminalLine("Please enable 'Apply AI Changes' mode to restore a version.", 'error');
+        // Optionally, prompt user or auto-enable:
+        // if (window.confirm("Restoring a version will apply changes to your project. Enable 'Apply AI Changes' and proceed?")) {
+        //   setApplyAiChanges(true); // Then proceed or let user click again
+        // }
+        return;
+    }
+
     if (messageToRestore && messageToRestore.project_files_snapshot && project && projectId) {
       setIsLoadingAIResponse(true); addTerminalLine(`Restoring to version from: ${new Date(messageToRestore.timestamp).toLocaleString()}`, 'system');
       try {
@@ -308,7 +348,11 @@ ${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || '
     const sysMsg: ChatMessage = { id: `sys-preview-err-${Date.now()}`, project_id: project!.id, sender: 'system', text: `Preview error in '${project?.active_preview_html_file}': ${error.message}. Asking AI to fix...`, timestamp: Date.now() };
     setChatMessages(prev => [...prev, sysMsg]);
     addTerminalLine(`[-] Failed: Preview Error in '${project?.active_preview_html_file}': ${error.message}. Asking AI to fix...`, 'error');
-    handleSendMessage(errorMsgForAI);
+    if (applyAiChanges) { // Only send to AI if changes are to be applied
+        handleSendMessage(errorMsgForAI);
+    } else {
+        addTerminalLine("Error occurred but 'Apply AI Changes' is OFF. AI will not attempt a fix automatically.", 'system');
+    }
   };
 
   if (isLoadingProject || !project) {
@@ -330,7 +374,18 @@ ${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || '
       )}
       <div className="flex flex-1 overflow-hidden">
         <div className="w-[380px] flex-shrink-0 bg-gray-900"> 
-          <ChatSidebar messages={chatMessages} onSendMessage={handleSendMessage} isLoading={isLoadingAIResponse} projectDescription={project.description || ''} onRestoreVersion={handleRestoreVersion} selectedElementContext={selectedElementContext} onClearElementSelection={handleClearElementSelection} isInspectModeActive={isInspectModeActive} />
+          <ChatSidebar 
+            messages={chatMessages} 
+            onSendMessage={handleSendMessage} 
+            isLoading={isLoadingAIResponse} 
+            projectDescription={project.description || ''} 
+            onRestoreVersion={handleRestoreVersion} 
+            selectedElementContext={selectedElementContext} 
+            onClearElementSelection={handleClearElementSelection} 
+            isInspectModeActive={isInspectModeActive}
+            applyAiChanges={applyAiChanges} // Pass state
+            onToggleApplyAiChanges={handleToggleApplyAiChanges} // Pass handler
+          />
         </div>
         <div className="flex-1 min-w-0 bg-gray-800"> 
           <EditorPreview projectFiles={projectFiles} activeEditorFile={project.active_editor_file} onActiveEditorFileChange={handleActiveEditorFileChange} activePreviewHtmlFile={project.active_preview_html_file} onActivePreviewHtmlFileChange={handleActivePreviewHtmlFileChange} onCodeChange={handleCodeChange} activeUITab={activeUITab} onUITabChange={handleUITabChange} onPreviewError={handlePreviewError} isInspectModeActive={isInspectModeActive} onElementSelected={handleElementSelected} onClearElementSelection={handleClearElementSelection} canAccessEditor={canAccessEditor} terminalOutput={terminalOutput} onTerminalCommand={handleTerminalCommand} onClearTerminal={clearTerminalOutput} isLoadingTerminalCommand={isLoadingAIResponse} />

@@ -7,15 +7,40 @@ let ai: GoogleGenAI | null = null;
 let activeChatSession: Chat | null = null;
 let currentModelId: ModelId | null = null;
 
+const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET';
 
 const getAiClient = (): GoogleGenAI => {
     if (!ai) {
-        if (!process.env.API_KEY) {
-            console.error("API_KEY environment variable not set.");
-            alert("Gemini API Key is not configured. Please set the process.env.API_KEY environment variable.");
-            throw new Error("API_KEY environment variable not set.");
+        let apiKeyToUse: string | undefined = undefined;
+        let apiKeySource: string = "";
+
+        // 1. Try to get API key from localStorage
+        try {
+            const userSetApiKey = localStorage.getItem(USER_SET_API_KEY_LS_KEY);
+            if (userSetApiKey && userSetApiKey.trim() !== '') {
+                apiKeyToUse = userSetApiKey.trim();
+                apiKeySource = "localStorage";
+            }
+        } catch (e) {
+            console.warn("Could not access localStorage to retrieve API key:", e);
         }
-        ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+        // 2. If not in localStorage, try process.env.API_KEY
+        if (!apiKeyToUse) {
+            if (process.env.API_KEY && process.env.API_KEY.trim() !== '') {
+                apiKeyToUse = process.env.API_KEY.trim();
+                apiKeySource = "environment variable (process.env.API_KEY)";
+            }
+        }
+
+        if (!apiKeyToUse) {
+            console.error("Gemini API Key is not configured. Please set it on the homepage or ensure the process.env.API_KEY environment variable is available.");
+            alert("Gemini API Key is not configured. Please set it on the homepage or ensure the process.env.API_KEY environment variable is available.");
+            throw new Error("Gemini API Key not configured.");
+        }
+        
+        console.info(`Using Gemini API Key from: ${apiKeySource}`);
+        ai = new GoogleGenAI({ apiKey: apiKeyToUse });
     }
     return ai;
 };

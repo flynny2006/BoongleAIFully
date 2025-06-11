@@ -11,9 +11,11 @@ interface ChatSidebarProps {
   isLoading: boolean;
   projectDescription: string | null;
   onRestoreVersion: (messageId: string) => void;
-  selectedElementContext: SelectedElementDetails | null; // New prop
-  onClearElementSelection: () => void; // New prop
-  isInspectModeActive: boolean; // New prop
+  selectedElementContext: SelectedElementDetails | null;
+  onClearElementSelection: () => void;
+  isInspectModeActive: boolean;
+  applyAiChanges: boolean; // New prop
+  onToggleApplyAiChanges: () => void; // New prop
 }
 
 const ChatSidebar: React.FC<ChatSidebarProps> = ({ 
@@ -24,7 +26,9 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onRestoreVersion,
   selectedElementContext,
   onClearElementSelection,
-  isInspectModeActive
+  isInspectModeActive,
+  applyAiChanges, // Destructure new prop
+  onToggleApplyAiChanges // Destructure new prop
 }) => {
   const [userInput, setUserInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -37,10 +41,8 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
 
   const handleSendMessage = async () => {
     if (userInput.trim() && !isLoading) {
-      // Pass selectedElementContext if present
       await onSendMessage(userInput.trim(), selectedElementContext);
       setUserInput('');
-      // onClearElementSelection(); // ProjectPage will handle clearing selection after message send
     }
   };
   
@@ -55,12 +57,9 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
     ? `Modifying <${selectedElementContext.tagName}>: ${selectedElementContext.textSnippet || selectedElementContext.id || selectedElementContext.classList[0] || 'element'}...`
     : "Ask AI to build or modify...";
 
-  // If user starts typing and an element was selected, but inspect mode is off, clear selection context for this message
   useEffect(() => {
     if (userInput && selectedElementContext && !isInspectModeActive) {
-      // This implies the user is typing a general query, not related to the stale selection.
-      // ProjectPage should manage clearing the selection when inspect mode is toggled off.
-      // This effect might be redundant if ProjectPage handles it.
+      // Logic for handling stale selection with user input
     }
   }, [userInput, selectedElementContext, isInspectModeActive, onClearElementSelection]);
 
@@ -69,6 +68,31 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
       <div className="p-4 border-b border-gray-700">
         <h2 className="text-xl font-semibold">AI Software Engineer</h2>
         {projectDescription && <p className="text-xs text-gray-400 mt-1 truncate" title={projectDescription}>Project: {projectDescription}</p>}
+        
+        <div className="mt-3 flex items-center justify-between">
+          <label htmlFor="apply-ai-changes-toggle" className="text-sm text-gray-300 cursor-pointer">
+            Apply AI Changes to App:
+          </label>
+          <button
+            id="apply-ai-changes-toggle"
+            onClick={onToggleApplyAiChanges}
+            disabled={isLoading || isInspectModeActive}
+            className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed
+              ${applyAiChanges ? 'bg-purple-600' : 'bg-gray-600'}`}
+            role="switch"
+            aria-checked={applyAiChanges}
+          >
+            <span
+              className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform
+                ${applyAiChanges ? 'translate-x-6' : 'translate-x-1'}`}
+            />
+          </button>
+        </div>
+        {!applyAiChanges && (
+          <p className="text-xs text-yellow-400 mt-1.5 bg-yellow-900 bg-opacity-50 p-1.5 rounded-md">
+            Chat-Only Mode: AI file changes won't be applied.
+          </p>
+        )}
       </div>
       
       <div className="flex-grow p-4 overflow-y-auto space-y-4 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800" role="log" aria-live="polite">
@@ -102,8 +126,8 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
             {msg.sender === 'ai' && msg.project_files_snapshot && index < messages.length - 1 && (messages[index+1]?.sender !== 'system' || !messages[index+1]?.text.startsWith("Restored project")) && (
               <button
                 onClick={() => onRestoreVersion(msg.id)}
-                disabled={isLoading || isInspectModeActive}
-                title="Restore project to this version"
+                disabled={isLoading || isInspectModeActive || !applyAiChanges} // Disable if applyAiChanges is false
+                title={!applyAiChanges ? "Enable 'Apply AI Changes' to restore" : "Restore project to this version"}
                 className="mt-1.5 px-2 py-1 bg-gray-600 hover:bg-gray-500 text-xs text-gray-200 rounded flex items-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RestoreIcon className="w-3 h-3 mr-1.5" />
@@ -138,7 +162,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
             onKeyPress={handleKeyPress}
             placeholder={placeholderText}
             className="flex-grow p-3 bg-transparent text-white placeholder-gray-500 focus:outline-none rounded-l-lg"
-            disabled={isLoading || isInspectModeActive} // Disable input if inspect mode is active and no selection made yet, or during loading
+            disabled={isLoading || isInspectModeActive}
             aria-label="Chat input"
           />
           <button
