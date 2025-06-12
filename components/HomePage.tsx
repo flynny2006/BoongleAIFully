@@ -4,19 +4,17 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, createProject, getUserProjects, deleteProjectAndRelatedData, updateProject } from '../services/supabaseService';
 import { Project, ModelId } from '../types';
-import { AVAILABLE_MODELS } from '../constants';
+import { AVAILABLE_MODELS, USER_SET_GEMINI_API_KEY_LS_KEY } from '../constants';
 import { resetChatSession } from '../services/geminiService';
-import { usePlan } from '../hooks/usePlan'; // Import usePlan
+import { usePlan } from '../hooks/usePlan';
 import DeleteIcon from './icons/DeleteIcon';
 import SearchIcon from './icons/SearchIcon';
 import EditIcon from './icons/EditIcon';
 import EditProjectModal from './EditProjectModal';
-// import KeyIcon from './icons/KeyIcon'; // KeyIcon no longer needed for Gemini API key input
+import KeyIcon from './icons/KeyIcon'; 
 import UserCircleIcon from './icons/UserCircleIcon'; 
 
 type SortOrder = 'recent' | 'oldest' | 'alphabetical';
-
-// const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET'; // Removed
 
 const HomePage: React.FC = () => {
   const { user, session, login, register, logout, verifyEmailOtp, loading: authLoading } = useAuth();
@@ -56,8 +54,12 @@ const HomePage: React.FC = () => {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isSavingProjectDetails, setIsSavingProjectDetails] = useState(false);
 
-  // API Key state related to USER_SET_API_KEY_LS_KEY has been removed.
-  // Gemini API key is now solely handled by process.env.API_KEY in geminiService.ts.
+  // User-set Gemini API Key states
+  const [userApiKeyInput, setUserApiKeyInput] = useState('');
+  const [storedUserApiKey, setStoredUserApiKey] = useState<string | null>(null);
+  const [apiKeyMessage, setApiKeyMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+
 
   useEffect(() => {
     if (user && session) {
@@ -76,6 +78,19 @@ const HomePage: React.FC = () => {
       setProjects([]);
     }
   }, [user, session]);
+
+  // Load user-set API key from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedKey = localStorage.getItem(USER_SET_GEMINI_API_KEY_LS_KEY);
+      if (savedKey) {
+        setStoredUserApiKey(savedKey);
+      }
+    } catch (e) {
+      console.warn("Could not access localStorage to get API key:", e);
+      setApiKeyMessage({ type: 'error', text: 'Could not access local storage for API key.' });
+    }
+  }, []);
 
   const handleAuthSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -149,7 +164,7 @@ const HomePage: React.FC = () => {
     setProjectCreationLoading(true);
     setAuthError(null);
     setAuthSuccessMessage(null);
-    resetChatSession();
+    resetChatSession(); // Important: Reset session to ensure new API key (if set) is picked up
 
     try {
       const createdProject = await createProject({
@@ -169,7 +184,6 @@ const HomePage: React.FC = () => {
 
       setNewProjectName('');
       setAuthSuccessMessage(`Project "${createdProject.name}" created!`);
-      // Add to local state and re-sort
       setProjects(prev => [createdProject, ...prev]);
       navigate(`/project/${createdProject.id}`);
     } catch (err: any) {
@@ -235,6 +249,36 @@ const HomePage: React.FC = () => {
     setSortOrder('recent');
     navigate('/');
   }
+
+  const handleSaveApiKey = (e: FormEvent) => {
+    e.preventDefault();
+    if (!userApiKeyInput.trim()) {
+      setApiKeyMessage({ type: 'error', text: 'API Key cannot be empty.' });
+      return;
+    }
+    try {
+      localStorage.setItem(USER_SET_GEMINI_API_KEY_LS_KEY, userApiKeyInput.trim());
+      setStoredUserApiKey(userApiKeyInput.trim());
+      setUserApiKeyInput(''); // Clear input field
+      setApiKeyMessage({ type: 'success', text: 'API Key saved successfully!' });
+      resetChatSession(); // Reset to force geminiService to pick up new key
+    } catch (error) {
+      console.error("Error saving API key to localStorage:", error);
+      setApiKeyMessage({ type: 'error', text: 'Failed to save API Key.' });
+    }
+  };
+
+  const handleClearApiKey = () => {
+    try {
+      localStorage.removeItem(USER_SET_GEMINI_API_KEY_LS_KEY);
+      setStoredUserApiKey(null);
+      setApiKeyMessage({ type: 'info', text: 'User-set API Key cleared.' });
+      resetChatSession(); // Reset to force geminiService to re-evaluate key source
+    } catch (error) {
+      console.error("Error clearing API key from localStorage:", error);
+      setApiKeyMessage({ type: 'error', text: 'Failed to clear API Key.' });
+    }
+  };
 
   const sortedAndFilteredProjects = useMemo(() => {
     let result = [...projects];
@@ -393,8 +437,81 @@ const HomePage: React.FC = () => {
           </button>
         </form>
 
-        {/* Gemini API Key Settings Form has been removed as per guidelines. 
-            API key is now exclusively managed via process.env.API_KEY. */}
+        {/* Gemini API Key Configuration Section */}
+        <div className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
+          <h2 className="text-2xl font-semibold mb-1 text-purple-400 flex items-center">
+            <KeyIcon className="w-6 h-6 mr-2 text-yellow-400" />
+            Gemini API Key Configuration
+          </h2>
+          <p className="text-xs text-gray-500 mb-4">
+            Set your Gemini API Key here to be used by the AI. This key is stored locally in your browser.
+          </p>
+
+          {apiKeyMessage && (
+            <p className={`mb-3 p-2 rounded text-sm ${
+              apiKeyMessage.type === 'success' ? 'bg-green-700 text-green-200' :
+              apiKeyMessage.type === 'error' ? 'bg-red-700 text-red-200' :
+              'bg-blue-700 text-blue-200'
+            }`}>
+              {apiKeyMessage.text}
+            </p>
+          )}
+
+          <form onSubmit={handleSaveApiKey} className="space-y-4">
+            <div>
+              <label htmlFor="gemini-api-key" className="block text-sm font-medium text-gray-300 mb-1">
+                Your Gemini API Key:
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  id="gemini-api-key"
+                  type={showApiKey ? "text" : "password"}
+                  value={userApiKeyInput}
+                  onChange={(e) => setUserApiKeyInput(e.target.value)}
+                  placeholder="Enter your Gemini API Key"
+                  className="w-full p-3 bg-gray-700 border border-gray-600 rounded-l-md text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
+                />
+                 <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="p-3 bg-gray-600 hover:bg-gray-500 text-white rounded-r-md text-xs h-full flex items-center justify-center"
+                  title={showApiKey ? "Hide Key" : "Show Key"}
+                  style={{minWidth: '60px'}}
+                >
+                  {showApiKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:space-x-3 space-y-3 sm:space-y-0">
+              <button
+                type="submit"
+                className="w-full sm:w-auto flex-grow p-3 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600"
+                disabled={!userApiKeyInput.trim()}
+              >
+                Save API Key
+              </button>
+              {storedUserApiKey && (
+                <button
+                  type="button"
+                  onClick={handleClearApiKey}
+                  className="w-full sm:w-auto flex-grow p-3 bg-red-600 hover:bg-red-700 rounded text-white font-semibold transition-colors"
+                >
+                  Clear Saved Key
+                </button>
+              )}
+            </div>
+          </form>
+          {storedUserApiKey ? (
+            <p className="mt-4 text-sm text-green-400">
+              Current User API Key: <span className="font-mono bg-gray-700 px-1 py-0.5 rounded text-green-300">Ending with ...{storedUserApiKey.slice(-4)}</span>
+            </p>
+          ) : (
+            <p className="mt-4 text-sm text-yellow-400">
+              No user-set API Key found in local storage. The application will attempt to use a system-provided key if available.
+            </p>
+          )}
+        </div>
+
 
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:space-x-4 space-y-4 sm:space-y-0">
           <div className="relative flex-grow">

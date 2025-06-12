@@ -171,3 +171,6 @@ Example of a minimal valid response (content of index.html must be a valid JSON 
 export const AVAILABLE_MODELS = [
   { id: 'gemini-2.5-flash-preview-04-17', name: 'Gemini 2.5 Flash' },
 ] as const;
+
+// LocalStorage Key for User-Set API Key
+export const USER_SET_GEMINI_API_KEY_LS_KEY = 'USER_SET_GEMINI_API_KEY';
