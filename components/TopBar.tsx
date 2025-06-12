@@ -38,6 +38,13 @@ const TopBar: React.FC<TopBarProps> = ({
   };
 
   const commonDisabled = isLoading || isPublishing || isTerminalActive;
+  const publishButtonText = isPublishing 
+    ? (isPublished ? 'Updating...' : 'Publishing...')
+    : (isPublished ? 'Update Site' : 'Publish Site');
+
+  const publishButtonBgColor = isPublishing 
+    ? 'bg-gray-600' 
+    : (isPublished ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white');
 
   return (
     <div className="p-3 bg-gray-900 border-b border-gray-700 flex items-center justify-between space-x-4">
@@ -47,7 +54,7 @@ const TopBar: React.FC<TopBarProps> = ({
           title="Back to Home"
           className="p-2 rounded-md hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
           aria-label="Back to Home"
-          disabled={commonDisabled} // Disable if busy or terminal active
+          disabled={commonDisabled}
         >
           <LeftArrowIcon className="w-5 h-5" />
         </button>
@@ -71,17 +78,14 @@ const TopBar: React.FC<TopBarProps> = ({
           onClick={onPublish}
           disabled={commonDisabled || isInspectModeActive}
           className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors flex items-center
-            ${isPublishing ? 'bg-gray-600' : 
-              (isPublished ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white')}
+            ${publishButtonBgColor}
             ${(commonDisabled || isInspectModeActive) ? 'opacity-50 cursor-not-allowed' : ''}
             disabled:opacity-70 disabled:cursor-not-allowed`}
         >
-          {isPublishing ? (
-            <>
-              <div className="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin mr-2"></div>
-              {isPublished ? 'Updating...' : 'Publishing...'}
-            </>
-          ) : (isPublished ? 'Update Site' : 'Publish Site')}
+          {isPublishing && (
+            <div className="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin mr-2"></div>
+          )}
+          {publishButtonText}
         </button>
         <div className="flex items-center space-x-2">
           <label htmlFor="model-switcher" className="text-sm text-gray-400">Model:</label>

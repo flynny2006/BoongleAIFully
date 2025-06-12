@@ -7,40 +7,20 @@ let ai: GoogleGenAI | null = null;
 let activeChatSession: Chat | null = null;
 let currentModelId: ModelId | null = null;
 
-const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET';
+// const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET'; // Removed
 
 const getAiClient = (): GoogleGenAI => {
     if (!ai) {
-        let apiKeyToUse: string | undefined = undefined;
-        let apiKeySource: string = "";
-
-        // 1. Try to get API key from localStorage
-        try {
-            const userSetApiKey = localStorage.getItem(USER_SET_API_KEY_LS_KEY);
-            if (userSetApiKey && userSetApiKey.trim() !== '') {
-                apiKeyToUse = userSetApiKey.trim();
-                apiKeySource = "localStorage";
-            }
-        } catch (e) {
-            console.warn("Could not access localStorage to retrieve API key:", e);
-        }
-
-        // 2. If not in localStorage, try process.env.API_KEY
-        if (!apiKeyToUse) {
-            if (process.env.API_KEY && process.env.API_KEY.trim() !== '') {
-                apiKeyToUse = process.env.API_KEY.trim();
-                apiKeySource = "environment variable (process.env.API_KEY)";
-            }
-        }
-
-        if (!apiKeyToUse) {
-            console.error("Gemini API Key is not configured. Please set it on the homepage or ensure the process.env.API_KEY environment variable is available.");
-            alert("Gemini API Key is not configured. Please set it on the homepage or ensure the process.env.API_KEY environment variable is available.");
-            throw new Error("Gemini API Key not configured.");
+        // API key MUST be obtained exclusively from the environment variable process.env.API_KEY
+        if (!process.env.API_KEY || process.env.API_KEY.trim() === '') {
+            console.error("Gemini API Key (process.env.API_KEY) is not configured. Please ensure this environment variable is set.");
+            // Alerting the user can be disruptive in a library, but for this app's context it might be intended.
+            alert("CRITICAL: Gemini API Key (process.env.API_KEY) is not configured. AI features will not work.");
+            throw new Error("Gemini API Key not configured in process.env.API_KEY.");
         }
         
-        console.info(`Using Gemini API Key from: ${apiKeySource}`);
-        ai = new GoogleGenAI({ apiKey: apiKeyToUse });
+        console.info(`Using Gemini API Key from: environment variable (process.env.API_KEY)`);
+        ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     }
     return ai;
 };
@@ -64,7 +44,7 @@ export const getOrCreateChatSession = (chatHistory: ChatMessage[], modelId: Mode
     }
 
     console.log(`Creating new chat session for model: ${modelId}`);
-    const client = getAiClient();
+    const client = getAiClient(); // This will now throw if API_KEY is not in process.env
     const genAiHistory = convertMessagesToGenAiHistory(chatHistory.filter(m => m.sender !== 'system'));
     currentModelId = modelId;
 
@@ -101,18 +81,14 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
         const fenceMatch = jsonStringToParse.match(fenceRegex);
 
         if (fenceMatch && fenceMatch[1]) {
-            jsonStringToParse = fenceMatch[1].trim(); // Extracted from fence
+            jsonStringToParse = fenceMatch[1].trim(); 
 
-            // Enhanced cleanup: If the extracted string doesn't cleanly start with { and end with },
-            // try to find the main JSON object within it. This handles cases like "{...} trailing junk"
-            // or "leading junk {...}" or "leading junk {...} trailing junk" inside the fence.
             if (!(jsonStringToParse.startsWith('{') && jsonStringToParse.endsWith('}'))) {
                 const firstBrace = jsonStringToParse.indexOf('{');
                 const lastBrace = jsonStringToParse.lastIndexOf('}');
 
                 if (firstBrace !== -1 && lastBrace > firstBrace) {
                     const candidate = jsonStringToParse.substring(firstBrace, lastBrace + 1);
-                    // Check if the candidate itself looks like a clean JSON object string
                     if (candidate.startsWith('{') && candidate.endsWith('}')) {
                         console.warn(`Cleaned potentially malformed JSON string by isolating content between first '{' and last '}'. Original from fence (trimmed, ends with "...${jsonStringToParse.slice(-50)}"). New (ends with "...${candidate.slice(-50)}")`);
                         jsonStringToParse = candidate;
@@ -124,8 +100,6 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
                 }
             }
         } else {
-            // Fallback if no fence found: try to find the first '{' and last '}' in the raw text.
-            // jsonStringToParse is rawText.trim() at this point.
             const firstBrace = jsonStringToParse.indexOf('{');
             const lastBrace = jsonStringToParse.lastIndexOf('}');
             if (firstBrace !== -1 && lastBrace > firstBrace) {
@@ -133,8 +107,6 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
             }
         }
 
-        // Attempt to fix a common issue: a newline character immediately before the final closing brace.
-        // This fix should run AFTER the primary JSON object isolation.
         let originalJsonStringForLog = jsonStringToParse; 
         let modifiedByNewlineFix = false;
 
@@ -142,11 +114,6 @@ export const sendMessageToAI = async (chat: Chat, message: string, modelIdUsed?:
             jsonStringToParse = jsonStringToParse.slice(0, -2) + '}';
             modifiedByNewlineFix = true;
         } 
-        // Our top-level structure is always an object, so checking for \n] is less critical but harmless.
-        // else if (jsonStringToParse.endsWith('\n]')) { 
-        //     jsonStringToParse = jsonStringToParse.slice(0, -2) + ']';
-        //     modifiedByNewlineFix = true;
-        // }
 
         if (modifiedByNewlineFix) {
             console.warn(`Attempted to fix JSON string ending with newline before brace. Original (last 30 chars): "...${originalJsonStringForLog.slice(-30)}". New (last 30 chars): "...${jsonStringToParse.slice(-30)}"`);

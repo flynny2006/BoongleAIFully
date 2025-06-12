@@ -11,16 +11,16 @@ import DeleteIcon from './icons/DeleteIcon';
 import SearchIcon from './icons/SearchIcon';
 import EditIcon from './icons/EditIcon';
 import EditProjectModal from './EditProjectModal';
-import KeyIcon from './icons/KeyIcon'; // Assuming a KeyIcon exists or will be created
-import UserCircleIcon from './icons/UserCircleIcon'; // Assuming a UserCircleIcon exists
+// import KeyIcon from './icons/KeyIcon'; // KeyIcon no longer needed for Gemini API key input
+import UserCircleIcon from './icons/UserCircleIcon'; 
 
 type SortOrder = 'recent' | 'oldest' | 'alphabetical';
 
-const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET';
+// const USER_SET_API_KEY_LS_KEY = 'GEMINI_API_KEY_USER_SET'; // Removed
 
 const HomePage: React.FC = () => {
   const { user, session, login, register, logout, verifyEmailOtp, loading: authLoading } = useAuth();
-  const { plan: currentPlan } = usePlan(); // Get current plan
+  const { plan: currentPlan } = usePlan(); 
   const navigate = useNavigate();
 
   // Auth form states
@@ -56,55 +56,8 @@ const HomePage: React.FC = () => {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isSavingProjectDetails, setIsSavingProjectDetails] = useState(false);
 
-  // API Key state
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [apiKeyMessage, setApiKeyMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [isUserApiKeySet, setIsUserApiKeySet] = useState(false);
-
-  useEffect(() => {
-    // Check if a user-set API key exists in localStorage
-    try {
-        const storedKey = localStorage.getItem(USER_SET_API_KEY_LS_KEY);
-        if (storedKey && storedKey.trim() !== '') {
-            setIsUserApiKeySet(true);
-            setApiKeyMessage({ type: 'info', text: 'A user-set API key is currently active.' });
-        } else {
-            setIsUserApiKeySet(false);
-        }
-    } catch (e) {
-      console.warn("Could not access localStorage for API key check:", e);
-    }
-  }, []);
-
-  const handleSaveApiKey = () => {
-    if (!apiKeyInput.trim()) {
-      setApiKeyMessage({ type: 'error', text: 'API Key cannot be empty.' });
-      return;
-    }
-    try {
-        localStorage.setItem(USER_SET_API_KEY_LS_KEY, apiKeyInput.trim());
-        setApiKeyMessage({ type: 'success', text: 'API Key saved successfully! It will be used for AI interactions.' });
-        setIsUserApiKeySet(true);
-        setApiKeyInput(''); // Clear input after saving
-        setTimeout(() => setApiKeyMessage(null), 4000);
-    } catch (e) {
-        setApiKeyMessage({ type: 'error', text: 'Failed to save API Key to localStorage.' });
-        console.error("Error saving API Key to localStorage:", e);
-    }
-  };
-
-  const handleClearApiKey = () => {
-    try {
-        localStorage.removeItem(USER_SET_API_KEY_LS_KEY);
-        setApiKeyMessage({ type: 'success', text: 'Saved API Key cleared. The application will now use the default key (if configured) or prompt if none is available.' });
-        setIsUserApiKeySet(false);
-        setTimeout(() => setApiKeyMessage(null), 4000);
-    } catch (e) {
-        setApiKeyMessage({ type: 'error', text: 'Failed to clear API Key from localStorage.' });
-        console.error("Error clearing API Key from localStorage:", e);
-    }
-  };
-
+  // API Key state related to USER_SET_API_KEY_LS_KEY has been removed.
+  // Gemini API key is now solely handled by process.env.API_KEY in geminiService.ts.
 
   useEffect(() => {
     if (user && session) {
@@ -268,7 +221,6 @@ const HomePage: React.FC = () => {
     } catch (err: any) {
       console.error("Error updating project details:", err);
       setAuthError(err.message || "Failed to update project details.");
-      // Optionally keep modal open on error: // handleCloseEditModal();
     } finally {
       setIsSavingProjectDetails(false);
     }
@@ -287,7 +239,6 @@ const HomePage: React.FC = () => {
   const sortedAndFilteredProjects = useMemo(() => {
     let result = [...projects];
 
-    // Filter
     if (searchTerm.trim()) {
       result = result.filter(proj =>
         proj.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -295,7 +246,6 @@ const HomePage: React.FC = () => {
       );
     }
 
-    // Sort
     switch (sortOrder) {
       case 'recent':
         result.sort((a, b) => new Date(b.last_modified).getTime() - new Date(a.last_modified).getTime());
@@ -395,7 +345,7 @@ const HomePage: React.FC = () => {
 
   // User is logged in
   return (
-    <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10 overflow-y-auto pb-24"> {/* Added pb-24 for bottom user info */}
+    <div className="flex flex-col items-center min-h-screen bg-black text-white p-4 pt-10 overflow-y-auto pb-24">
       <div className="w-full max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl md:text-4xl font-bold">Your Projects</h1>
@@ -416,7 +366,6 @@ const HomePage: React.FC = () => {
         {authError && <p className="mb-4 text-red-400 bg-red-900 p-3 rounded text-sm" role="alert">{authError}</p>}
         {authSuccessMessage && <p className="mb-4 text-green-400 bg-green-900 p-3 rounded text-sm" role="status">{authSuccessMessage}</p>}
 
-        {/* Create New Project Form */}
         <form onSubmit={handleCreateNewProject} className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
           <h2 className="text-2xl font-semibold mb-4 text-purple-400">Create New Project</h2>
           <input
@@ -444,52 +393,9 @@ const HomePage: React.FC = () => {
           </button>
         </form>
 
-        {/* API Key Settings Form */}
-        <div className="mb-10 p-6 bg-gray-800 rounded-lg shadow-xl">
-            <h2 className="text-2xl font-semibold mb-2 text-purple-400 flex items-center">
-                <KeyIcon className="w-6 h-6 mr-2 text-yellow-400" />
-                Gemini API Key
-            </h2>
-            <p className="text-sm text-gray-400 mb-4">
-                Optionally, set your own Gemini API Key. This key will be stored in your browser's local storage and will be used for AI interactions if provided. If cleared or not set, the application will attempt to use a pre-configured key (if available).
-            </p>
-            {apiKeyMessage && (
-                <p className={`mb-3 p-2 rounded text-sm ${
-                    apiKeyMessage.type === 'success' ? 'bg-green-700 text-green-200' :
-                    apiKeyMessage.type === 'error' ? 'bg-red-700 text-red-200' :
-                    'bg-blue-700 text-blue-200'
-                }`}>
-                    {apiKeyMessage.text}
-                </p>
-            )}
-            <div className="flex flex-col sm:flex-row items-stretch gap-3">
-                <input
-                    type="password"
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    placeholder="Enter your Gemini API Key"
-                    className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:ring-purple-500 focus:border-purple-500 outline-none"
-                />
-                <button
-                    onClick={handleSaveApiKey}
-                    disabled={!apiKeyInput.trim()}
-                    className="p-3 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed whitespace-nowrap"
-                >
-                    Save API Key
-                </button>
-            </div>
-            {isUserApiKeySet && (
-                <button
-                    onClick={handleClearApiKey}
-                    className="mt-3 w-full sm:w-auto p-3 bg-red-600 hover:bg-red-700 rounded text-white font-semibold transition-colors text-sm"
-                >
-                    Clear Saved API Key
-                </button>
-            )}
-        </div>
+        {/* Gemini API Key Settings Form has been removed as per guidelines. 
+            API key is now exclusively managed via process.env.API_KEY. */}
 
-
-        {/* Search and Sort Controls */}
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:space-x-4 space-y-4 sm:space-y-0">
           <div className="relative flex-grow">
             <input
@@ -517,8 +423,6 @@ const HomePage: React.FC = () => {
           </div>
         </div>
 
-
-        {/* Projects List */}
         {projectsLoading ? (
           <div className="text-center py-8">
             <div className="inline-block w-8 h-8 border-4 border-t-purple-500 border-gray-700 rounded-full animate-spin"></div>
@@ -571,7 +475,6 @@ const HomePage: React.FC = () => {
         )}
       </div>
 
-      {/* User Info Display */}
       {user && session && (
         <div className="fixed bottom-0 left-0 m-4 p-3 bg-gray-800 border border-gray-700 rounded-lg shadow-lg flex items-center space-x-3 max-w-xs z-20">
           <UserCircleIcon className="w-10 h-10 text-purple-400 flex-shrink-0" />

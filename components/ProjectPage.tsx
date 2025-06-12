@@ -5,6 +5,7 @@ import ChatSidebar from './ChatSidebar';
 import EditorPreview from './EditorPreview';
 import TopBar from './TopBar';
 import UpgradeToProModal from './UpgradeToProModal'; 
+import PublishSuccessModal from './PublishSuccessModal';
 import { usePlan } from '../hooks/usePlan'; 
 import {
   ChatMessage,
@@ -14,7 +15,7 @@ import {
   PublishedProject,
   SelectedElementDetails
 } from '../types';
-import { TerminalLine } from './TerminalDisplay'; // Import TerminalLine
+import { TerminalLine } from './TerminalDisplay';
 import {
   getOrCreateChatSession,
   sendMessageToAI,
@@ -42,6 +43,12 @@ function debounce<T extends (...args: any[]) => any>(func: T, delay: number): (.
   };
 }
 
+interface PublishSuccessModalInfo {
+  title: string;
+  message: string;
+  publicUrl: string;
+}
+
 const ProjectPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -56,7 +63,8 @@ const ProjectPage: React.FC = () => {
 
   const [lastPublishedInfo, setLastPublishedInfo] = useState<{ id: string; timestamp: string } | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [showPublishSuccess, setShowPublishSuccess] = useState(false);
+  const [publishSuccessModalContent, setPublishSuccessModalContent] = useState<PublishSuccessModalInfo | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null); // New state for publishing errors
 
   const [selectedElementContext, setSelectedElementContext] = useState<SelectedElementDetails | null>(null);
   const [isInspectModeActive, setIsInspectModeActive] = useState(false);
@@ -65,13 +73,13 @@ const ProjectPage: React.FC = () => {
   const [activeUITab, setActiveUITab] = useState<'editor' | 'preview' | 'terminal'>('preview');
   const [terminalOutput, setTerminalOutput] = useState<TerminalLine[]>([]);
   
-  const [applyAiChanges, setApplyAiChanges] = useState<boolean>(true); // New state for chat mode
+  const [applyAiChanges, setApplyAiChanges] = useState<boolean>(true); 
 
-  const handleToggleApplyAiChanges = () => { // Handler for the toggle
+  const handleToggleApplyAiChanges = () => { 
     setApplyAiChanges(prev => !prev);
-    if (!applyAiChanges) { // If turning ON "Apply AI Changes"
+    if (!applyAiChanges) { 
         addTerminalLine("AI changes will now be applied to the project.", 'system');
-    } else { // If turning OFF "Apply AI Changes" (entering chat-only mode)
+    } else { 
         addTerminalLine("Chat-Only Mode activated. AI file changes will not be applied.", 'system');
     }
   };
@@ -165,6 +173,16 @@ const ProjectPage: React.FC = () => {
       addTerminalLine(`Loaded ${Object.keys(files).length} project files.`, 'system');
       const messages = await fetchChatMessages(projectId); setChatMessages(messages);
       addTerminalLine(`Loaded ${messages.length} chat messages.`, 'system');
+
+      const { data: existingPublish } = await supabase
+        .from('published_projects')
+        .select('id, updated_at')
+        .eq('project_id', projectId)
+        .single();
+      if (existingPublish) {
+        setLastPublishedInfo({id: existingPublish.id, timestamp: existingPublish.updated_at});
+      }
+
       resetChatSession(); 
       addTerminalLine("AI session reset and ready.", 'system');
       addTerminalLine(`Welcome to project: ${proj.name}. Terminal is active. Type 'help' for commands.`, 'success');
@@ -233,20 +251,18 @@ const ProjectPage: React.FC = () => {
     const userMessageForLocalState: ChatMessage = { id: `user-${Date.now()}`, project_id: project.id, sender: 'user', text: messageText, timestamp: Date.now(), model_id_used: currentModelId, selected_element_context: currentSelectedElementContext || undefined, };
     setChatMessages(prev => [...prev, userMessageForLocalState]);
     addTerminalLine(`Sending prompt to AI: "${messageText.substring(0, 50).replace(/\n/g, ' ')}..."`, 'system');
-    // Ensure project_files_snapshot for user message reflects current state *before* AI response
     await addChatMessage({ project_id: project.id, sender: 'user', text: messageText, model_id_used: currentModelId, selected_element_context: currentSelectedElementContext || undefined, project_files_snapshot: projectFiles });
     setIsLoadingAIResponse(true); setSelectedElementContext(null); if (isInspectModeActive) setIsInspectModeActive(false); 
     try {
       const chatSession = getOrCreateChatSession([...chatMessages, userMessageForLocalState], currentModelId);
       const aiResponse: AIProjectStructure = await sendMessageToAI(chatSession, userMessageContent, currentModelId);
       
-      // Always create AI message for local state and DB with its intended files
       const aiMessageForLocalState: ChatMessage = { 
         id: `ai-${Date.now()}`, 
         project_id: project.id, 
         sender: 'ai', 
         text: aiResponse.aiMessage, 
-        project_files_snapshot: aiResponse.files, // AI's intended files
+        project_files_snapshot: aiResponse.files, 
         timestamp: Date.now(), 
         model_id_used: currentModelId 
       };
@@ -254,7 +270,6 @@ const ProjectPage: React.FC = () => {
       const { id: _aiId, timestamp: _aiTs, ...aiMessageDataForDb } = aiMessageForLocalState; 
       await addChatMessage(aiMessageDataForDb); 
 
-      // Only apply changes if applyAiChanges mode is ON
       if (applyAiChanges) {
         if (aiResponse.files && Object.keys(aiResponse.files).length > 0 ) {
           if (aiResponse.files["error.txt"]) {
@@ -271,7 +286,6 @@ const ProjectPage: React.FC = () => {
           addTerminalLine(`[-] AI responded, but no files were returned. AI Message: ${aiResponse.aiMessage}`, 'error');
         }
       } else {
-        // Chat-only mode: AI responded, files not applied.
         addTerminalLine(`AI response received (Chat-Only Mode): "${aiResponse.aiMessage.substring(0, 70).replace(/\n/g, ' ')}..." Files not applied.`, 'system');
       }
 
@@ -286,13 +300,8 @@ const ProjectPage: React.FC = () => {
 
   const handleRestoreVersion = async (messageId: string) => { 
     const messageToRestore = chatMessages.find(msg => msg.id === messageId);
-    // Ensure applyAiChanges is true before restoring
     if (!applyAiChanges) {
         addTerminalLine("Please enable 'Apply AI Changes' mode to restore a version.", 'error');
-        // Optionally, prompt user or auto-enable:
-        // if (window.confirm("Restoring a version will apply changes to your project. Enable 'Apply AI Changes' and proceed?")) {
-        //   setApplyAiChanges(true); // Then proceed or let user click again
-        // }
         return;
     }
 
@@ -310,17 +319,39 @@ const ProjectPage: React.FC = () => {
       finally { setIsLoadingAIResponse(false); }
     }
   };
+
   const handlePublishProject = async () => { 
-    if (!project || !projectId ) return; setIsPublishing(true); addTerminalLine("Publishing project...", 'system');
+    if (!project || !projectId ) return; 
+    setIsPublishing(true); 
+    setPublishError(null); // Clear previous errors
+    setPublishSuccessModalContent(null); // Clear previous success messages
+    const wasAlreadyPublished = !!lastPublishedInfo;
+    addTerminalLine(wasAlreadyPublished ? "Updating published site..." : "Publishing project...", 'system');
+    
     try {
       const user = (await supabase.auth.getUser()).data.user; if (!user) throw new Error("User not authenticated");
       const published = await publishProjectToSupabase(projectId, user.id, projectFiles, project.active_preview_html_file || 'index.html');
-      setLastPublishedInfo({ id: published.id, timestamp: published.updated_at }); setShowPublishSuccess(true);
-      addTerminalLine(`[+] Project published! Public ID: ${published.id}`, 'success');
-      setTimeout(() => setShowPublishSuccess(false), 3000);
-    } catch (error) { addTerminalLine(`[-] Failed to publish: ${(error as Error).message}`, 'error'); }
+      
+      const modalTitle = wasAlreadyPublished ? "Site Updated!" : "Project Published!";
+      const modalMessage = wasAlreadyPublished 
+        ? "Your changes have been successfully published and are now live." 
+        : "Your project is now live and accessible to the public!";
+      
+      setPublishSuccessModalContent({
+        title: modalTitle,
+        message: modalMessage,
+        publicUrl: `#/view/${published.id}`
+      });
+      setLastPublishedInfo({ id: published.id, timestamp: published.updated_at });
+      addTerminalLine(`[+] ${modalTitle} Public ID: ${published.id}`, 'success');
+    } catch (error) { 
+      const errorMsg = `Failed to publish: ${(error as Error).message}`;
+      addTerminalLine(`[-] ${errorMsg}`, 'error'); 
+      setPublishError(errorMsg); // Set the UI error message
+    }
     finally { setIsPublishing(false); }
   };
+
   const handleToggleInspectMode = () => {
     setIsInspectModeActive(prev => {
       const newMode = !prev;
@@ -348,7 +379,7 @@ ${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || '
     const sysMsg: ChatMessage = { id: `sys-preview-err-${Date.now()}`, project_id: project!.id, sender: 'system', text: `Preview error in '${project?.active_preview_html_file}': ${error.message}. Asking AI to fix...`, timestamp: Date.now() };
     setChatMessages(prev => [...prev, sysMsg]);
     addTerminalLine(`[-] Failed: Preview Error in '${project?.active_preview_html_file}': ${error.message}. Asking AI to fix...`, 'error');
-    if (applyAiChanges) { // Only send to AI if changes are to be applied
+    if (applyAiChanges) { 
         handleSendMessage(errorMsgForAI);
     } else {
         addTerminalLine("Error occurred but 'Apply AI Changes' is OFF. AI will not attempt a fix automatically.", 'system');
@@ -366,12 +397,42 @@ ${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || '
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
-      <TopBar projectName={project.name} selectedModel={currentModelId} onModelChange={handleModelChange} isLoading={isLoadingAIResponse || isPublishing} onPublish={handlePublishProject} isPublished={!!lastPublishedInfo} isPublishing={isPublishing} isInspectModeActive={isInspectModeActive} onToggleInspectMode={handleToggleInspectMode} isTerminalActive={activeUITab === 'terminal'} />
-      {showPublishSuccess && (
-        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded shadow-lg z-50">
-          Project published! Public link: <a href={`#/view/${lastPublishedInfo?.id}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-green-200">View Site</a>
+      <TopBar 
+        projectName={project.name} 
+        selectedModel={currentModelId} 
+        onModelChange={handleModelChange} 
+        isLoading={isLoadingAIResponse || isPublishing} 
+        onPublish={handlePublishProject} 
+        isPublished={!!lastPublishedInfo} 
+        isPublishing={isPublishing} 
+        isInspectModeActive={isInspectModeActive} 
+        onToggleInspectMode={handleToggleInspectMode} 
+        isTerminalActive={activeUITab === 'terminal'} 
+      />
+      
+      {publishError && (
+        <div className="bg-red-700 text-red-100 p-3 text-sm text-center shadow-md" role="alert">
+          <strong className="font-semibold">Publishing Error:</strong> {publishError}
+          <button 
+            onClick={() => setPublishError(null)} 
+            className="ml-4 text-red-200 hover:text-white font-bold text-lg leading-none"
+            aria-label="Dismiss error"
+          >
+            &times;
+          </button>
         </div>
       )}
+
+      {publishSuccessModalContent && (
+        <PublishSuccessModal
+          isOpen={!!publishSuccessModalContent}
+          title={publishSuccessModalContent.title}
+          message={publishSuccessModalContent.message}
+          publicUrl={publishSuccessModalContent.publicUrl}
+          onClose={() => setPublishSuccessModalContent(null)}
+        />
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         <div className="w-[380px] flex-shrink-0 bg-gray-900"> 
           <ChatSidebar 
@@ -383,8 +444,8 @@ ${projectFiles[project?.active_preview_html_file || '']?.substring(0, 2000) || '
             selectedElementContext={selectedElementContext} 
             onClearElementSelection={handleClearElementSelection} 
             isInspectModeActive={isInspectModeActive}
-            applyAiChanges={applyAiChanges} // Pass state
-            onToggleApplyAiChanges={handleToggleApplyAiChanges} // Pass handler
+            applyAiChanges={applyAiChanges} 
+            onToggleApplyAiChanges={handleToggleApplyAiChanges} 
           />
         </div>
         <div className="flex-1 min-w-0 bg-gray-800"> 

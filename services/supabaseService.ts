@@ -1,9 +1,9 @@
 import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
 import { Project, ProjectFile, ChatMessage, PublishedProject } from '../types';
 
-// Updated with new user-provided details
-const supabaseUrl = 'https://xmeowpghsbnyfeemdtsl.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZW93cGdoc2JueWZlZW1kdHNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk2MzI0ODcsImV4cCI6MjA2NTIwODQ4N30.8AcwOuvLCelhvST0BP-w022iRT2huheOVwIsPZH1uuM';
+// TODO: Replace with environment variables in a real deployment
+const supabaseUrl = 'https://qepczquvetguuzcdmxry.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFlcGN6cXV2ZXRndXV6Y2RteHJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkzMTU1MzEsImV4cCI6MjA2NDg5MTUzMX0.W6lLN5Ci35kmJ2lzPnYuwFPlQeTdasC4T3ebXkRlPQY';
 
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
